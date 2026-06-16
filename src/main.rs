@@ -61,9 +61,11 @@ fn main() -> Result<()> {
         );
     }
 
-    eprintln!("Loading Whisper Turbo model (Metal GPU)...");
+    eprintln!("Loading Whisper Turbo model (CPU/BLAS)...");
     let mut cparams = WhisperContextParameters::default();
-    cparams.use_gpu(true);
+    // Metal kernel JIT-compile is broken with whisper-rs 0.13 + recent macOS Metal SDK.
+    // CPU+BLAS is plenty fast for Turbo on Apple Silicon; revisit when whisper-rs ships a fix.
+    cparams.use_gpu(false);
     let ctx = WhisperContext::new_with_params(MODEL_PATH, cparams)
         .context("failed to load whisper model")?;
     eprintln!("  Model ready.");
@@ -332,19 +334,37 @@ fn scrub(text: &str) -> String {
     ).unwrap();
     s = fillers.replace_all(&s, "").to_string();
 
-    // immediate word repetition: "the the patient" -> "the patient"
-    let dup = Regex::new(r"(?i)\b(\w+)(\s+\1\b)+").unwrap();
-    s = dup.replace_all(&s, "$1").to_string();
-
-    // collapse multiple spaces
+    // collapse multiple spaces first so word-boundary scanning is simple
     let spaces = Regex::new(r"\s+").unwrap();
     s = spaces.replace_all(&s, " ").to_string();
+
+    // immediate word repetition: "the the patient" -> "the patient"
+    // The `regex` crate doesn't support backreferences, so do this in plain Rust.
+    s = dedup_adjacent_words(&s);
 
     // tidy space-before-punctuation
     let pun = Regex::new(r"\s+([,.!?;:])").unwrap();
     s = pun.replace_all(&s, "$1").to_string();
 
     s.trim().to_string()
+}
+
+fn dedup_adjacent_words(s: &str) -> String {
+    let mut out: Vec<&str> = Vec::with_capacity(64);
+    for w in s.split(' ').filter(|w| !w.is_empty()) {
+        let last_alnum: String = out
+            .last()
+            .map(|p| p.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+            .unwrap_or_default();
+        let this_alnum: String = w
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_lowercase();
+        if !this_alnum.is_empty() && this_alnum == last_alnum {
+            continue;
+        }
+        out.push(w);
+    }
+    out.join(" ")
 }
 
 fn paste_cmd_v() -> Result<()> {
