@@ -102,16 +102,22 @@ fn main() -> Result<()> {
     eprintln!();
     eprintln!("Ready.");
     eprintln!("  ` (tilde / backtick key)  - start/stop dictation");
-    eprintln!("  Caps Lock      - paste last dictated text");
-    eprintln!("  Ctrl-C         - quit");
+    eprintln!("                              On stop, text auto-types where your cursor is.");
+    eprintln!("  Caps Lock                 - re-paste the last dictated text");
+    eprintln!("  Ctrl-C                    - quit");
     eprintln!();
-    eprintln!("First-run permissions (REQUIRED — without these, hotkeys + paste do nothing):");
-    eprintln!("  1. Microphone: macOS will ask -> click Allow.");
-    eprintln!("  2. Accessibility: System Settings -> Privacy & Security -> Accessibility.");
+    eprintln!("HOW TO USE:");
+    eprintln!("  1. Click into the app where you want the text (TextEdit, browser, EHR, etc.).");
+    eprintln!("  2. Press ` (tilde). Speak. Press ` again. Text appears at your cursor.");
+    eprintln!("  3. To paste the same text again somewhere else, click there and press Caps Lock.");
+    eprintln!();
+    eprintln!("ONE-TIME SETUP — please do these once or hotkeys + paste won't work:");
+    eprintln!("  Accessibility: System Settings -> Privacy & Security -> Accessibility.");
     eprintln!("     Add Terminal (or whatever app launched this) and toggle it ON.");
     eprintln!("     Quit and re-launch this app after granting.");
-    eprintln!("  Tip: in System Settings -> Keyboard -> Modifier Keys, set Caps Lock to");
-    eprintln!("       'No Action' so it stops toggling caps when used as paste.");
+    eprintln!("  Disable Caps Lock toggle: System Settings -> Keyboard -> Modifier Keys");
+    eprintln!("     -> Caps Lock -> No Action. Otherwise Caps Lock keeps toggling caps");
+    eprintln!("     state every time you use it as a paste key.");
     eprintln!();
 
     loop {
@@ -173,10 +179,18 @@ fn main() -> Result<()> {
                         continue;
                     }
                     eprintln!("        -> \"{}\"", cleaned);
-                    eprintln!("        (on clipboard. Press Caps Lock to paste.)");
 
                     if let Ok(mut cb) = Clipboard::new() {
                         let _ = cb.set_text(cleaned.clone());
+                    }
+
+                    // Auto-paste at wherever the cursor is right now. If the user was in
+                    // TextEdit / browser / EHR when they pressed tilde to stop, the text
+                    // lands there. If they were in Terminal, they can switch to the real
+                    // target and press Caps Lock to re-paste.
+                    match paste_cmd_v() {
+                        Ok(_) => eprintln!("        (typed at cursor. Caps Lock re-pastes it.)"),
+                        Err(e) => eprintln!("        auto-paste failed: {e}. Press Caps Lock or Cmd-V to paste manually."),
                     }
                 }
             }

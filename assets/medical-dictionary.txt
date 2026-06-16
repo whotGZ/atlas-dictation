@@ -193,6 +193,98 @@ basic metabolic panel
 comprehensive metabolic panel
 urinalysis
 
+# --- OB/GYN ---
+salpingo-oophorectomy
+bilateral salpingo-oophorectomy
+unilateral salpingo-oophorectomy
+oophorectomy
+salpingectomy
+hysterectomy
+total abdominal hysterectomy
+total laparoscopic hysterectomy
+supracervical hysterectomy
+myomectomy
+endometrial ablation
+endometriosis
+adenomyosis
+leiomyoma
+endometrial biopsy
+dilation and curettage
+cervical conization
+LEEP procedure
+ectopic pregnancy
+ovarian cyst
+polycystic ovary syndrome
+PCOS
+preeclampsia
+eclampsia
+HELLP syndrome
+gestational diabetes
+chorioamnionitis
+cesarean section
+
+# --- General + GI Surgery + Cancer ---
+partial colectomy
+total colectomy
+hemicolectomy
+right hemicolectomy
+left hemicolectomy
+sigmoidectomy
+low anterior resection
+abdominoperineal resection
+APR
+proctectomy
+ileocolic anastomosis
+end-to-end anastomosis
+primary anastomosis
+diverting loop ileostomy
+loop colostomy
+Hartmann's procedure
+Whipple procedure
+pancreaticoduodenectomy
+distal pancreatectomy
+splenectomy
+adrenalectomy
+nephrectomy
+partial nephrectomy
+gastrectomy
+total gastrectomy
+subtotal gastrectomy
+fundoplication
+Nissen fundoplication
+Heller myotomy
+laparoscopic appendectomy
+laparoscopic cholecystectomy
+inguinal hernia repair
+ventral hernia repair
+umbilical hernia repair
+mesh repair
+component separation
+muscularis propria
+muscularis mucosae
+mucosa
+submucosa
+serosa
+adventitia
+lamina propria
+local invasion
+lymphovascular invasion
+perineural invasion
+margin negative
+margin positive
+R0 resection
+R1 resection
+lymphadenectomy
+omentectomy
+debulking
+cytoreduction
+peritoneal carcinomatosis
+adenocarcinoma
+squamous cell carcinoma
+neuroendocrine tumor
+gastrointestinal stromal tumor
+GIST
+
 # --- Common Mistranscriptions (highest value — keep last) ---
 sphincterotomy
 choledocholithiasis
@@ -210,3 +302,11 @@ dexmedetomidine
 levothyroxine
 empagliflozin
 semaglutide
+salpingo-oophorectomy
+bilateral salpingo-oophorectomy
+muscularis propria
+muscularis mucosae
+adenocarcinoma
+lymphadenectomy
+partial colectomy
+hemicolectomy
