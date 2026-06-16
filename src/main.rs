@@ -2,7 +2,6 @@
 // ` = record toggle (auto-pastes at cursor on stop). Right Option = re-paste.
 
 use anyhow::{Context, Result};
-use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,8 +20,8 @@ use arboard::Clipboard;
 use enigo::{Direction, Enigo, Key as EKey, Keyboard, Settings};
 use regex::Regex;
 
-const MODEL_PATH: &str = "models/ggml-large-v3-turbo.bin";
-const DICT_PATH: &str = "assets/medical-dictionary.txt";
+const MODEL_NAME: &str = "ggml-large-v3-turbo.bin";
+const DICT_NAME: &str = "medical-dictionary.txt";
 const RECORD_KEY: RKey = RKey::BackQuote;
 const PASTE_KEY: RKey = RKey::AltGr; // Right Option on Mac; Right Alt on Win/Linux
 const TARGET_SR: u32 = 16_000;
@@ -45,25 +44,25 @@ fn main() -> Result<()> {
     eprintln!("See DISCLAIMER.md for full terms.");
     eprintln!();
 
-    if !Path::new(MODEL_PATH).exists() {
+    let model_path = resolve(MODEL_NAME, "models/ggml-large-v3-turbo.bin");
+    let dict_path  = resolve(DICT_NAME, "assets/medical-dictionary.txt");
+    if !model_path.exists() {
         anyhow::bail!(
             "Model file missing at {}.\n\
-             Download it with:\n  \
+             Download with:\n  \
              curl -L -o {} https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
-            MODEL_PATH, MODEL_PATH
+            model_path.display(), model_path.display()
         );
     }
 
     eprintln!("Loading Whisper Turbo model (CPU/BLAS)...");
     let mut cparams = WhisperContextParameters::default();
-    // Metal kernel JIT-compile is broken with whisper-rs 0.13 + recent macOS Metal SDK.
-    // CPU+BLAS is plenty fast for Turbo on Apple Silicon; revisit when whisper-rs ships a fix.
-    cparams.use_gpu(false);
-    let ctx = WhisperContext::new_with_params(MODEL_PATH, cparams)
+    cparams.use_gpu(false); // Metal JIT-compile is broken w/ whisper-rs 0.13; BLAS is fast enough.
+    let ctx = WhisperContext::new_with_params(model_path.to_str().unwrap(), cparams)
         .context("failed to load whisper model")?;
     eprintln!("  Model ready.");
 
-    let dict_raw = std::fs::read_to_string(DICT_PATH).unwrap_or_default();
+    let dict_raw = std::fs::read_to_string(&dict_path).unwrap_or_default();
     let mut initial_prompt: String = dict_raw
         .lines()
         .map(|l| l.trim())
@@ -385,6 +384,21 @@ fn dedup_adjacent_words(s: &str) -> String {
         out.push(w);
     }
     out.join(" ")
+}
+
+/// Prefer the `.app` bundle's Contents/Resources/<name>, fall back to the
+/// dev-mode project-relative path. Same binary works in `cargo run` and inside
+/// AtlasDictation.app.
+fn resolve(bundle_name: &str, dev_path: &str) -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(macos) = exe.parent() {
+            if let Some(contents) = macos.parent() {
+                let p = contents.join("Resources").join(bundle_name);
+                if p.exists() { return p; }
+            }
+        }
+    }
+    std::path::PathBuf::from(dev_path)
 }
 
 /// Play a short macOS system sound, non-blocking. Failure is silent (no audio

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>atlas-dictation</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.atlasmc.dictation</string>
+    <key>CFBundleName</key>
+    <string>Atlas Dictation</string>
+    <key>CFBundleDisplayName</key>
+    <string>Atlas Dictation</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.10</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.10</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Atlas Dictation transcribes your voice locally on your Mac. Audio is never sent to any server.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Atlas Dictation sends a Cmd+V keystroke to paste each transcript at your cursor.</string>
+</dict>
+</plist>

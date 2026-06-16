@@ -6,3 +6,6 @@ Cargo.lock
 # It will be attached to GitHub Releases instead.
 models/*.bin
 models/*.gguf
+
+# Built .app bundle (also large because the model gets copied in).
+dist/
