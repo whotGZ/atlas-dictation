@@ -72,13 +72,28 @@ fn main() -> Result<()> {
     eprintln!("  Model ready.");
 
     let dict_raw = std::fs::read_to_string(DICT_PATH).unwrap_or_default();
-    let dict_terms: Vec<&str> = dict_raw
+    let initial_prompt: String = dict_raw
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .collect();
-    let initial_prompt = dict_terms.join(", ");
-    eprintln!("  Dictionary: {} entries.", dict_terms.len());
+        .collect::<Vec<_>>()
+        .join(" ");
+    // Whisper's initial prompt is hard-limited to ~1024 tokens; effective biasing
+    // budget is ~220 tokens (~150 words). Truncate by characters as a safety net
+    // — better than letting the tokenizer silently drop content mid-sentence.
+    const PROMPT_CHAR_BUDGET: usize = 1100;
+    let initial_prompt = if initial_prompt.len() > PROMPT_CHAR_BUDGET {
+        eprintln!("  WARNING: biasing prompt is {} chars, truncating to {}.",
+                  initial_prompt.len(), PROMPT_CHAR_BUDGET);
+        let mut s = initial_prompt;
+        s.truncate(PROMPT_CHAR_BUDGET);
+        s
+    } else {
+        initial_prompt
+    };
+    eprintln!("  Biasing prompt: {} chars (~{} words).",
+              initial_prompt.len(),
+              initial_prompt.split_whitespace().count());
 
     let host = cpal::default_host();
     let device = host
