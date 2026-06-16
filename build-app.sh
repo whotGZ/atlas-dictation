@@ -15,6 +15,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp target/release/atlas-dictation "$APP/Contents/MacOS/atlas-dictation"
 cp packaging/Info.plist             "$APP/Contents/Info.plist"
+cp packaging/AppIcon.icns           "$APP/Contents/Resources/AppIcon.icns"
 cp models/ggml-large-v3-turbo.bin   "$APP/Contents/Resources/ggml-large-v3-turbo.bin"
 cp assets/medical-dictionary.txt    "$APP/Contents/Resources/medical-dictionary.txt"
 
