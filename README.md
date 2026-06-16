@@ -66,6 +66,10 @@ Edit `assets/medical-dictionary.txt`. One term per line. Lines starting with `#`
 
 Whisper's "initial prompt" has a soft cap (~224 tokens) — when the list grows large, the **earliest** entries are dropped first. Keep your most-mistranscribed terms toward the bottom of the file.
 
+## Origin
+
+AIC Dictation was born on **Somvati Amavasya, 15 June 2026** — the rare Monday new moon falling within Adhik Maas, considered in Hindu tradition a day of spiritual renewal and the clearing of darkness. We hope the tool gives the same kind of quiet renewal to the clinicians who use it.
+
 ## How it works
 
 ```
