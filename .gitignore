@@ -1,0 +1,8 @@
+target/
+Cargo.lock
+.DS_Store
+
+# The Turbo model is large (~1.5 GB). Don't commit it.
+# It will be attached to GitHub Releases instead.
+models/*.bin
+models/*.gguf

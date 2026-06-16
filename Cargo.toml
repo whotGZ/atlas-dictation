@@ -1,0 +1,23 @@
+[package]
+name = "atlas-dictation"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Atlas Intensive Care Dictation — local medical speech-to-text using Whisper Turbo. Nothing leaves your device."
+authors = ["Atlas Management Consulting"]
+repository = "https://github.com/whotGZ/atlas-dictation"
+
+[dependencies]
+whisper-rs = { version = "0.13", features = ["metal"] }
+cpal = "0.15"
+rdev = "0.5"
+arboard = "3"
+enigo = "0.2"
+regex = "1"
+anyhow = "1"
+crossbeam-channel = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

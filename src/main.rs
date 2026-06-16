@@ -1,0 +1,318 @@
+// Atlas Intensive Care Dictation
+// Local medical speech-to-text. No network calls, ever.
+//
+// Hotkey: F9 toggles recording.
+// Press F9 -> "REC". Talk. Press F9 again -> transcribes, scrubs fillers, pastes at cursor.
+
+use anyhow::{Context, Result};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::SampleFormat;
+
+use rdev::{listen, Event, EventType, Key as RKey};
+use crossbeam_channel::{unbounded, Sender};
+
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+
+use arboard::Clipboard;
+use enigo::{Direction, Enigo, Key as EKey, Keyboard, Settings};
+use regex::Regex;
+
+const MODEL_PATH: &str = "models/ggml-large-v3-turbo.bin";
+const DICT_PATH: &str = "assets/medical-dictionary.txt";
+const HOTKEY: RKey = RKey::F9;
+const TARGET_SR: u32 = 16_000;
+
+fn main() -> Result<()> {
+    eprintln!("Atlas Intensive Care Dictation v0.1");
+    eprintln!("====================================");
+
+    if !Path::new(MODEL_PATH).exists() {
+        anyhow::bail!(
+            "Model file missing at {}.\n\
+             Download it with:\n  \
+             curl -L -o {} https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+            MODEL_PATH, MODEL_PATH
+        );
+    }
+
+    eprintln!("Loading Whisper Turbo model (Metal GPU)...");
+    let mut cparams = WhisperContextParameters::default();
+    cparams.use_gpu(true);
+    let ctx = WhisperContext::new_with_params(MODEL_PATH, cparams)
+        .context("failed to load whisper model")?;
+    eprintln!("  Model ready.");
+
+    let dict_raw = std::fs::read_to_string(DICT_PATH).unwrap_or_default();
+    let dict_terms: Vec<&str> = dict_raw
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+    let initial_prompt = dict_terms.join(", ");
+    eprintln!("  Dictionary: {} entries.", dict_terms.len());
+
+    let host = cpal::default_host();
+    let device = host
+        .default_input_device()
+        .context("no default input device")?;
+    eprintln!("  Mic: {}", device.name().unwrap_or_else(|_| "default".into()));
+    let supported = device
+        .default_input_config()
+        .context("failed to query input config")?;
+    let input_sr = supported.sample_rate().0;
+    let channels = supported.channels() as usize;
+
+    let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::with_capacity(input_sr as usize * 30)));
+    let recording = Arc::new(AtomicBool::new(false));
+
+    let stream = build_stream(&device, &supported, channels, buffer.clone(), recording.clone())?;
+    stream.play().context("failed to start audio stream")?;
+
+    let (tx, rx) = unbounded::<()>();
+    spawn_hotkey_listener(tx);
+
+    eprintln!();
+    eprintln!("Ready. Press F9 to toggle recording. Ctrl-C to quit.");
+    eprintln!("(macOS will prompt for Accessibility permission on first F9 press.)");
+    eprintln!();
+
+    loop {
+        rx.recv().ok();
+
+        let was_recording = recording.load(Ordering::Relaxed);
+        if !was_recording {
+            buffer.lock().unwrap().clear();
+            recording.store(true, Ordering::Relaxed);
+            eprintln!("[REC]   speak now... (F9 again to stop)");
+        } else {
+            recording.store(false, Ordering::Relaxed);
+            eprintln!("[STOP]  transcribing...");
+
+            let raw = {
+                let mut buf = buffer.lock().unwrap();
+                std::mem::take(&mut *buf)
+            };
+            if raw.len() < (input_sr as usize) / 4 {
+                eprintln!("        (too short, skipped)");
+                continue;
+            }
+
+            let samples = resample_linear(&raw, input_sr, TARGET_SR);
+
+            let mut state = ctx.create_state().context("create_state failed")?;
+            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+            params.set_n_threads(num_cpus_safe());
+            params.set_translate(false);
+            params.set_language(Some("en"));
+            params.set_print_special(false);
+            params.set_print_progress(false);
+            params.set_print_realtime(false);
+            params.set_print_timestamps(false);
+            params.set_initial_prompt(&initial_prompt);
+            state.full(params, &samples).context("whisper full() failed")?;
+
+            let n_seg = state.full_n_segments().context("seg count failed")?;
+            let mut text = String::new();
+            for i in 0..n_seg {
+                if let Ok(s) = state.full_get_segment_text(i) {
+                    text.push_str(&s);
+                }
+            }
+
+            let cleaned = scrub(&text);
+            if cleaned.is_empty() {
+                eprintln!("        (no speech detected)");
+                continue;
+            }
+            eprintln!("        -> \"{}\"", cleaned);
+
+            if let Ok(mut cb) = Clipboard::new() {
+                let _ = cb.set_text(cleaned.clone());
+            }
+            if let Err(e) = paste_cmd_v() {
+                eprintln!("        paste failed: {e}. Text is on the clipboard; press Cmd-V to insert.");
+            }
+        }
+    }
+}
+
+fn build_stream(
+    device: &cpal::Device,
+    supported: &cpal::SupportedStreamConfig,
+    channels: usize,
+    buffer: Arc<Mutex<Vec<f32>>>,
+    recording: Arc<AtomicBool>,
+) -> Result<cpal::Stream> {
+    let config: cpal::StreamConfig = supported.config();
+    let err_fn = |err| eprintln!("audio stream error: {err}");
+
+    let stream = match supported.sample_format() {
+        SampleFormat::F32 => {
+            let buf = buffer.clone();
+            let rec = recording.clone();
+            device.build_input_stream(
+                &config,
+                move |data: &[f32], _: &_| {
+                    if !rec.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let mut b = buf.lock().unwrap();
+                    if channels == 1 {
+                        b.extend_from_slice(data);
+                    } else {
+                        for frame in data.chunks(channels) {
+                            let mono: f32 = frame.iter().copied().sum::<f32>() / channels as f32;
+                            b.push(mono);
+                        }
+                    }
+                },
+                err_fn,
+                None,
+            )?
+        }
+        SampleFormat::I16 => {
+            let buf = buffer.clone();
+            let rec = recording.clone();
+            device.build_input_stream(
+                &config,
+                move |data: &[i16], _: &_| {
+                    if !rec.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let mut b = buf.lock().unwrap();
+                    for frame in data.chunks(channels) {
+                        let mono: f32 = frame
+                            .iter()
+                            .map(|&s| s as f32 / 32768.0)
+                            .sum::<f32>()
+                            / channels as f32;
+                        b.push(mono);
+                    }
+                },
+                err_fn,
+                None,
+            )?
+        }
+        SampleFormat::U16 => {
+            let buf = buffer.clone();
+            let rec = recording.clone();
+            device.build_input_stream(
+                &config,
+                move |data: &[u16], _: &_| {
+                    if !rec.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let mut b = buf.lock().unwrap();
+                    for frame in data.chunks(channels) {
+                        let mono: f32 = frame
+                            .iter()
+                            .map(|&s| (s as f32 - 32768.0) / 32768.0)
+                            .sum::<f32>()
+                            / channels as f32;
+                        b.push(mono);
+                    }
+                },
+                err_fn,
+                None,
+            )?
+        }
+        fmt => anyhow::bail!("unsupported sample format: {fmt:?}"),
+    };
+    Ok(stream)
+}
+
+fn spawn_hotkey_listener(tx: Sender<()>) {
+    thread::spawn(move || {
+        let last = Arc::new(AtomicBool::new(false));
+        let last_clone = last.clone();
+        let tx_clone = tx.clone();
+        if let Err(e) = listen(move |event: Event| match event.event_type {
+            EventType::KeyPress(k) if k == HOTKEY => {
+                if !last_clone.swap(true, Ordering::Relaxed) {
+                    let _ = tx_clone.send(());
+                }
+            }
+            EventType::KeyRelease(k) if k == HOTKEY => {
+                last_clone.store(false, Ordering::Relaxed);
+            }
+            _ => {}
+        }) {
+            eprintln!("hotkey listener failed: {e:?}");
+            eprintln!("Grant Accessibility permission in System Settings -> Privacy & Security.");
+        }
+    });
+}
+
+fn resample_linear(input: &[f32], in_rate: u32, out_rate: u32) -> Vec<f32> {
+    if in_rate == out_rate {
+        return input.to_vec();
+    }
+    let ratio = in_rate as f64 / out_rate as f64;
+    let out_len = (input.len() as f64 / ratio).floor() as usize;
+    let mut out = Vec::with_capacity(out_len);
+    let last = input.len().saturating_sub(1);
+    for i in 0..out_len {
+        let src = i as f64 * ratio;
+        let i0 = (src.floor() as usize).min(last);
+        let i1 = (i0 + 1).min(last);
+        let frac = (src - i0 as f64) as f32;
+        out.push(input[i0] * (1.0 - frac) + input[i1] * frac);
+    }
+    out
+}
+
+fn scrub(text: &str) -> String {
+    let mut s = text.to_string();
+
+    // remove leading/trailing whitespace per segment join
+    s = s.trim().to_string();
+
+    // Common filler tokens (case-insensitive). Be conservative: only kill when surrounded by word boundaries.
+    let fillers = Regex::new(
+        r"(?i)\b(uh+|um+|er+|erm+|ah+|hmm+|mm+m*|like|you know|i mean|kind of|sort of)\b[,.]?\s*"
+    ).unwrap();
+    s = fillers.replace_all(&s, "").to_string();
+
+    // immediate word repetition: "the the patient" -> "the patient"
+    let dup = Regex::new(r"(?i)\b(\w+)(\s+\1\b)+").unwrap();
+    s = dup.replace_all(&s, "$1").to_string();
+
+    // collapse multiple spaces
+    let spaces = Regex::new(r"\s+").unwrap();
+    s = spaces.replace_all(&s, " ").to_string();
+
+    // tidy space-before-punctuation
+    let pun = Regex::new(r"\s+([,.!?;:])").unwrap();
+    s = pun.replace_all(&s, "$1").to_string();
+
+    s.trim().to_string()
+}
+
+fn paste_cmd_v() -> Result<()> {
+    let mut enigo =
+        Enigo::new(&Settings::default()).map_err(|e| anyhow::anyhow!("enigo init: {e:?}"))?;
+    thread::sleep(Duration::from_millis(80));
+    enigo
+        .key(EKey::Meta, Direction::Press)
+        .map_err(|e| anyhow::anyhow!("press cmd: {e:?}"))?;
+    enigo
+        .key(EKey::Unicode('v'), Direction::Click)
+        .map_err(|e| anyhow::anyhow!("click v: {e:?}"))?;
+    enigo
+        .key(EKey::Meta, Direction::Release)
+        .map_err(|e| anyhow::anyhow!("release cmd: {e:?}"))?;
+    Ok(())
+}
+
+fn num_cpus_safe() -> std::os::raw::c_int {
+    let n = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    n.min(8) as std::os::raw::c_int
+}

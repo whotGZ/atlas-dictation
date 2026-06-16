@@ -1,0 +1,212 @@
+# Atlas Intensive Care Dictation — medical biasing dictionary.
+# Each non-comment, non-empty line is a term fed to Whisper as an initial prompt.
+# Add or remove freely. Whisper's initial prompt has a soft cap (~224 tokens),
+# so when this list gets very long the earliest entries are dropped first.
+# Keep the highest-value (most-often-mistranscribed) terms toward the BOTTOM.
+
+# --- General + Cardiology ---
+electrocardiogram
+echocardiogram
+ejection fraction
+atrial fibrillation
+ventricular tachycardia
+bradycardia
+sinus rhythm
+mitral regurgitation
+tricuspid regurgitation
+aortic stenosis
+aortic regurgitation
+pericarditis
+myocardial infarction
+non-ST elevation
+ST elevation
+troponin
+NT-proBNP
+percutaneous coronary intervention
+coronary artery bypass graft
+metoprolol
+carvedilol
+lisinopril
+losartan
+amlodipine
+atorvastatin
+rosuvastatin
+ezetimibe
+apixaban
+rivaroxaban
+dabigatran
+enoxaparin
+warfarin
+
+# --- Pulmonology + Critical Care ---
+pneumothorax
+hemothorax
+pleural effusion
+pulmonary embolism
+acute respiratory distress syndrome
+ARDS
+PEEP
+FiO2
+tidal volume
+plateau pressure
+endotracheal intubation
+extubation
+tracheostomy
+bronchoscopy
+thoracentesis
+chronic obstructive pulmonary disease
+COPD exacerbation
+asthma exacerbation
+community-acquired pneumonia
+ventilator-associated pneumonia
+sepsis
+septic shock
+qSOFA
+SIRS
+norepinephrine
+epinephrine
+vasopressin
+phenylephrine
+dobutamine
+propofol
+dexmedetomidine
+midazolam
+fentanyl
+ketamine
+rocuronium
+succinylcholine
+
+# --- Gastroenterology + Surgery ---
+cholecystitis
+cholelithiasis
+choledocholithiasis
+cholangitis
+cholangiopancreatography
+ERCP
+cholecystectomy
+sphincterotomy
+enterotomy
+gastrotomy
+colectomy
+appendectomy
+herniorrhaphy
+diverticulitis
+pancreatitis
+cirrhosis
+ascites
+paracentesis
+upper GI bleed
+lower GI bleed
+hematemesis
+melena
+hematochezia
+proton pump inhibitor
+omeprazole
+pantoprazole
+ondansetron
+
+# --- Neurology ---
+subarachnoid hemorrhage
+intracerebral hemorrhage
+intraventricular hemorrhage
+ischemic stroke
+transient ischemic attack
+basilar artery
+middle cerebral artery
+glioblastoma
+meningitis
+encephalitis
+status epilepticus
+levetiracetam
+phenytoin
+lacosamide
+lumbar puncture
+electroencephalogram
+EEG
+
+# --- Renal + Endocrine ---
+acute kidney injury
+chronic kidney disease
+end-stage renal disease
+hemodialysis
+creatinine
+blood urea nitrogen
+eGFR
+hyponatremia
+hypernatremia
+hyperkalemia
+hypocalcemia
+hypomagnesemia
+diabetic ketoacidosis
+DKA
+hyperosmolar hyperglycemic state
+HbA1c
+insulin glargine
+insulin lispro
+metformin
+empagliflozin
+semaglutide
+liraglutide
+levothyroxine
+
+# --- Infectious Disease + Antibiotics ---
+piperacillin-tazobactam
+vancomycin
+ceftriaxone
+cefepime
+meropenem
+imipenem
+ertapenem
+azithromycin
+clarithromycin
+erythromycin
+doxycycline
+levofloxacin
+moxifloxacin
+ciprofloxacin
+metronidazole
+clindamycin
+linezolid
+daptomycin
+trimethoprim-sulfamethoxazole
+fluconazole
+voriconazole
+micafungin
+acyclovir
+oseltamivir
+
+# --- Imaging + Labs ---
+computed tomography
+magnetic resonance imaging
+ultrasound
+chest radiograph
+contrast-enhanced
+gadolinium
+lactate
+procalcitonin
+D-dimer
+INR
+PT
+PTT
+complete blood count
+basic metabolic panel
+comprehensive metabolic panel
+urinalysis
+
+# --- Common Mistranscriptions (highest value — keep last) ---
+sphincterotomy
+choledocholithiasis
+cholangiopancreatography
+cholecystectomy
+enterotomy
+cholecystitis
+pancreatitis
+cholangitis
+subarachnoid
+intraventricular
+piperacillin-tazobactam
+norepinephrine
+dexmedetomidine
+levothyroxine
+empagliflozin
+semaglutide
