@@ -33,6 +33,7 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
+    redirect_stderr_when_bundled();
     eprintln!("Atlas Intensive Care Dictation v0.1");
     eprintln!("====================================");
     eprintln!();
@@ -384,6 +385,28 @@ fn dedup_adjacent_words(s: &str) -> String {
         out.push(w);
     }
     out.join(" ")
+}
+
+/// When launched as a `.app` (no Terminal), redirect stderr to a log file so
+/// the [REC]/[STOP]/transcript output is recoverable. Tail with:
+///   tail -f ~/Library/Logs/AtlasDictation/dictation.log
+fn redirect_stderr_when_bundled() {
+    let in_bundle = std::env::current_exe()
+        .map(|p| p.to_string_lossy().contains(".app/Contents/MacOS"))
+        .unwrap_or(false);
+    if !in_bundle { return; }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let dir = format!("{home}/Library/Logs/AtlasDictation");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(f) = std::fs::OpenOptions::new()
+        .create(true).append(true)
+        .open(format!("{dir}/dictation.log"))
+    {
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: dup2 with a valid open fd; std::mem::forget keeps the kernel ref alive.
+        unsafe { libc::dup2(f.as_raw_fd(), 2); }
+        std::mem::forget(f);
+    }
 }
 
 /// Prefer the `.app` bundle's Contents/Resources/<name>, fall back to the

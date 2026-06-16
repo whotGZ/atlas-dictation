@@ -18,6 +18,8 @@
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
+    <key>LSUIElement</key>
+    <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Atlas Dictation transcribes your voice locally on your Mac. Audio is never sent to any server.</string>
     <key>NSAppleEventsUsageDescription</key>
