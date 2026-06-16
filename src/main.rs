@@ -11,6 +11,7 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -147,9 +148,11 @@ fn main() -> Result<()> {
                 if !was_recording {
                     buffer.lock().unwrap().clear();
                     recording.store(true, Ordering::Relaxed);
+                    play_start_sound();
                     eprintln!("[REC]   speak now... (` again to stop)");
                 } else {
                     recording.store(false, Ordering::Relaxed);
+                    play_stop_sound();
                     eprintln!("[STOP]  transcribing...");
 
                     let raw = {
@@ -385,6 +388,27 @@ fn dedup_adjacent_words(s: &str) -> String {
         out.push(w);
     }
     out.join(" ")
+}
+
+/// Play a short macOS system sound, non-blocking. Failure is silent (no audio
+/// is annoying but not a reason to crash the app).
+fn play_sound(name: &str) {
+    let _ = Command::new("afplay")
+        .arg(format!("/System/Library/Sounds/{name}.aiff"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
+fn play_start_sound() {
+    // Short, high, "go" tick. Doesn't delay the user from talking.
+    play_sound("Pop");
+}
+
+fn play_stop_sound() {
+    // Cleaner "done" tone, lower than start. Distinct enough to know apart.
+    play_sound("Glass");
 }
 
 fn paste_cmd_v() -> Result<()> {
