@@ -40,6 +40,8 @@ This includes (without limitation) any liability for clinical harm, financial lo
 
 The app records audio locally and processes it locally. It does **not** make network calls during transcription. It does **not** send your audio, transcripts, or any usage data to Atlas Management Consulting, Atlas Intensive Care, the authors, or any third party. The model file and dictionary are bundled with the application.
 
+**Transcripts are never written to disk.** They live in RAM only between the moment of transcription and the moment they're pasted at your cursor (and on the macOS clipboard, like any other "copy" operation, until you copy something else). The app's diagnostic log file at `~/Library/Logs/AtlasDictation/dictation.log` records the *length* of each transcript (in characters and words) but never the content. There is intentionally no "save transcript" feature — storing PHI on disk would create downstream privacy, retention, and compliance obligations that this tool is not built to handle.
+
 If you choose to compile the app from source yourself, you may verify these claims by reading the source code or running a network monitor.
 
 ## Acceptance

@@ -15,6 +15,7 @@ Built by **Atlas Management Consulting** as part of our practice-efficiency suit
 Cloud dictation services send your patient audio to a third party. They want a Business Associate Agreement, charge per minute, and lose accuracy on procedure names. This tool does the opposite:
 
 - **Local-only.** Audio is recorded, transcribed, and discarded on your computer.
+- **No transcript storage.** Transcripts live in RAM until pasted at your cursor, never written to disk. No "save transcript" feature — keeping PHI off the filesystem by design.
 - **No BAA needed** — no third party ever sees the data. (We do **not** claim "HIPAA certified" — HIPAA certifies covered entities, not software. This tool is designed for HIPAA-conscious workflows.)
 - **Medical-aware.** Comes with a curated dictionary that biases Whisper's spelling toward terms doctors actually dictate.
 - **Free for everyone, paid installer for convenience.** Source is MIT; we sell a one-click pre-built installer for those who don't want to compile.

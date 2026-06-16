@@ -208,7 +208,11 @@ fn main() -> Result<()> {
                         eprintln!("        (no speech detected)");
                         continue;
                     }
-                    eprintln!("        -> \"{}\"", cleaned);
+                    // Never log transcript text — it might contain PHI and the log file
+                    // persists when launched as a .app. Length only confirms success.
+                    eprintln!("        -> ({} chars, {} words)",
+                              cleaned.len(),
+                              cleaned.split_whitespace().count());
 
                     *last_text.lock().unwrap() = Some(cleaned.clone());
                     if let Ok(mut cb) = Clipboard::new() {
