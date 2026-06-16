@@ -265,6 +265,7 @@ fn run_event_loop_with_tray(rx_state: Receiver<TrayState>) -> Result<()> {
 
     let _tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
+        .with_icon(icon)
         .with_tooltip("Atlas Dictation")
         .build()
         .map_err(|e| anyhow::anyhow!("tray build: {e}"))?;
