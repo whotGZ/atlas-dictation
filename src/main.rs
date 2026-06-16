@@ -9,7 +9,6 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,7 +16,6 @@ use std::time::{Duration, Instant};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 
-use rdev::{listen, Event, EventType, Key as RKey};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
@@ -32,9 +30,13 @@ use tray_icon::{Icon, TrayIconBuilder};
 
 const MODEL_NAME: &str = "ggml-large-v3-turbo.bin";
 const DICT_NAME: &str = "medical-dictionary.txt";
-const RECORD_KEY: RKey = RKey::BackQuote;
-const PASTE_KEY: RKey = RKey::AltGr; // Right Option on Mac; Right Alt on Win/Linux
 const TARGET_SR: u32 = 16_000;
+
+// macOS virtual keycodes (kVK_*).
+const KC_TILDE: i64 = 50;          // kVK_ANSI_Grave
+const KC_RIGHT_OPTION: i64 = 61;   // kVK_RightOption
+// NX_DEVICERALTKEYMASK — set in CGEventFlags when right Option is currently held.
+const FLAG_RIGHT_OPTION_BIT: u64 = 0x00000040;
 
 #[derive(Debug, Clone, Copy)]
 enum Cmd {
@@ -76,7 +78,7 @@ fn main() -> Result<()> {
     let (tx_cmd, rx_cmd) = unbounded::<Cmd>();
     let (tx_state, rx_state) = unbounded::<TrayState>();
 
-    spawn_hotkey_listener(tx_cmd);
+    spawn_event_tap(tx_cmd);
 
     let tx_state_pipeline = tx_state.clone();
     thread::spawn(move || {
@@ -378,35 +380,81 @@ fn build_stream(
     Ok(stream)
 }
 
-// ─── Hotkey listener (rdev, background thread) ───────────────────────────────
+// ─── Hotkey listener: Core Graphics event tap (active mode) ──────────────────
+//
+// Replaces rdev::listen. Differences that matter:
+//   - The tap is in *active* mode (CGEventTapOptions::Default), so returning
+//     `None` from the callback SWALLOWS the keypress. The tilde never reaches
+//     the focused app; no stray `\`` characters get typed.
+//   - The tap runs on its own thread driving a CFRunLoop. macOS delivers
+//     events from the kernel into that run loop.
 
-fn spawn_hotkey_listener(tx: Sender<Cmd>) {
+fn spawn_event_tap(tx: Sender<Cmd>) {
     thread::spawn(move || {
-        let rh = AtomicBool::new(false);
-        let ph = AtomicBool::new(false);
-        if let Err(e) = listen(move |event: Event| match event.event_type {
-            EventType::KeyPress(k) if k == RECORD_KEY => {
-                if !rh.swap(true, Ordering::Relaxed) {
-                    let _ = tx.send(Cmd::ToggleRecord);
+        use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+        use core_graphics::event::{
+            CGEventTap, CGEventTapLocation, CGEventTapOptions,
+            CGEventTapPlacement, CGEventType,
+        };
+
+        // Single-threaded state used only inside the tap callback.
+        let right_option_held = std::cell::Cell::new(false);
+
+        let tap_result = CGEventTap::new(
+            CGEventTapLocation::HID,
+            CGEventTapPlacement::HeadInsertEventTap,
+            CGEventTapOptions::Default, // active — we can drop/modify events
+            vec![CGEventType::KeyDown, CGEventType::FlagsChanged],
+            move |_proxy, ev_type, event| {
+                let kc = event.get_integer_value_field(9 /* kCGKeyboardEventKeycode */);
+                match ev_type {
+                    CGEventType::KeyDown if kc == KC_TILDE => {
+                        let autorepeat = event.get_integer_value_field(
+                            8, /* kCGKeyboardEventAutorepeat */
+                        );
+                        if autorepeat == 0 {
+                            let _ = tx.send(Cmd::ToggleRecord);
+                        }
+                        None // swallow — no `\`` ever lands in the focused app
+                    }
+                    CGEventType::FlagsChanged if kc == KC_RIGHT_OPTION => {
+                        let bits = event.get_flags().bits();
+                        let now_held = (bits & FLAG_RIGHT_OPTION_BIT) != 0;
+                        let was_held = right_option_held.get();
+                        if now_held && !was_held {
+                            let _ = tx.send(Cmd::RepasteLast);
+                        }
+                        right_option_held.set(now_held);
+                        // Pass modifier through — don't break other apps that use Right Option.
+                        Some(event.clone())
+                    }
+                    _ => Some(event.clone()),
                 }
+            },
+        );
+
+        let tap = match tap_result {
+            Ok(t) => t,
+            Err(_) => {
+                eprintln!("CGEventTap create failed (likely missing Accessibility).");
+                eprintln!("Grant Accessibility: System Settings -> Privacy & Security -> Accessibility.");
+                eprintln!("Add Atlas Dictation, toggle ON, Quit (menu-bar icon), and re-launch.");
+                return;
             }
-            EventType::KeyRelease(k) if k == RECORD_KEY => {
-                rh.store(false, Ordering::Relaxed);
+        };
+
+        let loop_source = match tap.mach_port.create_runloop_source(0) {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("CFRunLoop source create failed.");
+                return;
             }
-            EventType::KeyPress(k) if k == PASTE_KEY => {
-                if !ph.swap(true, Ordering::Relaxed) {
-                    let _ = tx.send(Cmd::RepasteLast);
-                }
-            }
-            EventType::KeyRelease(k) if k == PASTE_KEY => {
-                ph.store(false, Ordering::Relaxed);
-            }
-            _ => {}
-        }) {
-            eprintln!("hotkey listener failed: {e:?}");
-            eprintln!("Grant Accessibility: System Settings -> Privacy & Security -> Accessibility.");
-            eprintln!("Add Atlas Dictation, toggle ON, then Quit (menu-bar icon) and re-launch.");
+        };
+        unsafe {
+            CFRunLoop::get_current().add_source(&loop_source, kCFRunLoopCommonModes);
         }
+        tap.enable();
+        CFRunLoop::run_current(); // blocks; the OS delivers events here.
     });
 }
 

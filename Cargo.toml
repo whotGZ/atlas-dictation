@@ -10,7 +10,6 @@ repository = "https://github.com/whotGZ/atlas-dictation"
 [dependencies]
 whisper-rs = { version = "0.13", features = ["metal"] }
 cpal = "0.15"
-rdev = "0.5"
 arboard = "3"
 enigo = "0.2"
 regex = "1"
@@ -22,6 +21,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+core-foundation = "0.9"
+core-graphics = "0.23"
 
 [profile.release]
 opt-level = 3
