@@ -3,7 +3,9 @@
 //
 // Architecture:
 //   main thread       : tao event loop + NSStatusItem (menubar icon, Quit menu)
-//   hotkey thread     : rdev::listen, fires Cmd::ToggleRecord / RepasteLast
+//   hotkey thread     : CGEventTap in active mode (swallows tilde keydown,
+//                       passes Right Option through). Fires Cmd::ToggleRecord
+//                       / Cmd::RepasteLast on its own CFRunLoop.
 //   pipeline thread   : owns WhisperContext + cpal::Device + state. Processes Cmd.
 
 use anyhow::{Context, Result};
