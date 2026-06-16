@@ -1,13 +1,5 @@
-// Atlas Intensive Care Dictation
-// Local medical speech-to-text. No network calls, ever.
-//
-// Hotkeys:
-//   ` (tilde / backtick key)  - toggle recording. Press once to start, again to stop.
-//   Caps Lock      - paste the last dictated text wherever your cursor is.
-//
-// Flow: press ` -> "REC". Talk. Press ` again -> transcribes, scrubs fillers,
-// puts the cleaned text on the clipboard. Move cursor to any app (EHR, browser,
-// Notes, Word), press Caps Lock to paste.
+// Atlas Intensive Care Dictation — local medical speech-to-text, no network.
+// ` = record toggle (auto-pastes at cursor on stop). Right Option = re-paste.
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -72,25 +64,19 @@ fn main() -> Result<()> {
     eprintln!("  Model ready.");
 
     let dict_raw = std::fs::read_to_string(DICT_PATH).unwrap_or_default();
-    let initial_prompt: String = dict_raw
+    let mut initial_prompt: String = dict_raw
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .collect::<Vec<_>>()
         .join(" ");
-    // Whisper's initial prompt is hard-limited to ~1024 tokens; effective biasing
-    // budget is ~220 tokens (~150 words). Truncate by characters as a safety net
-    // — better than letting the tokenizer silently drop content mid-sentence.
+    // Whisper's effective biasing budget is ~220 tokens; safety-truncate by chars.
     const PROMPT_CHAR_BUDGET: usize = 1100;
-    let initial_prompt = if initial_prompt.len() > PROMPT_CHAR_BUDGET {
+    if initial_prompt.len() > PROMPT_CHAR_BUDGET {
         eprintln!("  WARNING: biasing prompt is {} chars, truncating to {}.",
                   initial_prompt.len(), PROMPT_CHAR_BUDGET);
-        let mut s = initial_prompt;
-        s.truncate(PROMPT_CHAR_BUDGET);
-        s
-    } else {
-        initial_prompt
-    };
+        initial_prompt.truncate(PROMPT_CHAR_BUDGET);
+    }
     eprintln!("  Biasing prompt: {} chars (~{} words).",
               initial_prompt.len(),
               initial_prompt.split_whitespace().count());
@@ -197,7 +183,9 @@ fn main() -> Result<()> {
 
                     let mut state = ctx.create_state().context("create_state failed")?;
                     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-                    params.set_n_threads(num_cpus_safe());
+                    params.set_n_threads(
+                        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8) as _,
+                    );
                     params.set_translate(false);
                     params.set_language(Some("en"));
                     params.set_print_special(false);
@@ -312,15 +300,12 @@ fn build_stream(
 
 fn spawn_hotkey_listener(tx: Sender<Cmd>) {
     thread::spawn(move || {
-        let rec_held = Arc::new(AtomicBool::new(false));
-        let paste_held = Arc::new(AtomicBool::new(false));
-        let rh = rec_held.clone();
-        let ph = paste_held.clone();
-        let tx_clone = tx.clone();
+        let rh = AtomicBool::new(false);
+        let ph = AtomicBool::new(false);
         if let Err(e) = listen(move |event: Event| match event.event_type {
             EventType::KeyPress(k) if k == RECORD_KEY => {
                 if !rh.swap(true, Ordering::Relaxed) {
-                    let _ = tx_clone.send(Cmd::ToggleRecord);
+                    let _ = tx.send(Cmd::ToggleRecord);
                 }
             }
             EventType::KeyRelease(k) if k == RECORD_KEY => {
@@ -328,7 +313,7 @@ fn spawn_hotkey_listener(tx: Sender<Cmd>) {
             }
             EventType::KeyPress(k) if k == PASTE_KEY => {
                 if !ph.swap(true, Ordering::Relaxed) {
-                    let _ = tx_clone.send(Cmd::RepasteLast);
+                    let _ = tx.send(Cmd::RepasteLast);
                 }
             }
             EventType::KeyRelease(k) if k == PASTE_KEY => {
@@ -389,16 +374,12 @@ fn scrub(text: &str) -> String {
 }
 
 fn dedup_adjacent_words(s: &str) -> String {
+    let strip = |w: &str| w.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
     let mut out: Vec<&str> = Vec::with_capacity(64);
     for w in s.split(' ').filter(|w| !w.is_empty()) {
-        let last_alnum: String = out
-            .last()
-            .map(|p| p.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
-            .unwrap_or_default();
-        let this_alnum: String = w
-            .trim_matches(|c: char| !c.is_alphanumeric())
-            .to_lowercase();
-        if !this_alnum.is_empty() && this_alnum == last_alnum {
+        let this = strip(w);
+        let last = out.last().map(|p| strip(p)).unwrap_or_default();
+        if !this.is_empty() && this.eq_ignore_ascii_case(&last) {
             continue;
         }
         out.push(w);
@@ -443,9 +424,3 @@ fn paste_cmd_v() -> Result<()> {
     Ok(())
 }
 
-fn num_cpus_safe() -> std::os::raw::c_int {
-    let n = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-    n.min(8) as std::os::raw::c_int
-}
