@@ -92,10 +92,11 @@ fn main() -> Result<()> {
     let channels = supported.channels() as usize;
 
     let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::with_capacity(input_sr as usize * 30)));
-    let recording = Arc::new(AtomicBool::new(false));
 
-    let stream = build_stream(&device, &supported, channels, buffer.clone(), recording.clone())?;
-    stream.play().context("failed to start audio stream")?;
+    // Mic stream is created on record-start and dropped on record-stop. While idle, the
+    // mic is NOT open — macOS hides the orange privacy indicator and the menubar
+    // doesn't say "Terminal is using your microphone." Important for a medical product.
+    let mut active_stream: Option<cpal::Stream> = None;
 
     let (tx, rx) = unbounded::<Cmd>();
     spawn_hotkey_listener(tx);
@@ -144,14 +145,27 @@ fn main() -> Result<()> {
                 }
             }
             Cmd::ToggleRecord => {
-                let was_recording = recording.load(Ordering::Relaxed);
-                if !was_recording {
+                if active_stream.is_none() {
+                    // START — open the mic
                     buffer.lock().unwrap().clear();
-                    recording.store(true, Ordering::Relaxed);
-                    play_start_sound();
-                    eprintln!("[REC]   speak now... (` again to stop)");
+                    match build_stream(&device, &supported, channels, buffer.clone()) {
+                        Ok(s) => {
+                            if let Err(e) = s.play() {
+                                eprintln!("[REC]   failed to start mic: {e}");
+                                continue;
+                            }
+                            active_stream = Some(s);
+                            play_start_sound();
+                            eprintln!("[REC]   speak now... (` again to stop)");
+                        }
+                        Err(e) => {
+                            eprintln!("[REC]   failed to open mic: {e}");
+                            continue;
+                        }
+                    }
                 } else {
-                    recording.store(false, Ordering::Relaxed);
+                    // STOP — drop the stream so macOS turns off the mic indicator
+                    drop(active_stream.take());
                     play_stop_sound();
                     eprintln!("[STOP]  transcribing...");
 
@@ -214,7 +228,6 @@ fn build_stream(
     supported: &cpal::SupportedStreamConfig,
     channels: usize,
     buffer: Arc<Mutex<Vec<f32>>>,
-    recording: Arc<AtomicBool>,
 ) -> Result<cpal::Stream> {
     let config: cpal::StreamConfig = supported.config();
     let err_fn = |err| eprintln!("audio stream error: {err}");
@@ -222,13 +235,9 @@ fn build_stream(
     let stream = match supported.sample_format() {
         SampleFormat::F32 => {
             let buf = buffer.clone();
-            let rec = recording.clone();
             device.build_input_stream(
                 &config,
                 move |data: &[f32], _: &_| {
-                    if !rec.load(Ordering::Relaxed) {
-                        return;
-                    }
                     let mut b = buf.lock().unwrap();
                     if channels == 1 {
                         b.extend_from_slice(data);
@@ -245,13 +254,9 @@ fn build_stream(
         }
         SampleFormat::I16 => {
             let buf = buffer.clone();
-            let rec = recording.clone();
             device.build_input_stream(
                 &config,
                 move |data: &[i16], _: &_| {
-                    if !rec.load(Ordering::Relaxed) {
-                        return;
-                    }
                     let mut b = buf.lock().unwrap();
                     for frame in data.chunks(channels) {
                         let mono: f32 = frame
@@ -268,13 +273,9 @@ fn build_stream(
         }
         SampleFormat::U16 => {
             let buf = buffer.clone();
-            let rec = recording.clone();
             device.build_input_stream(
                 &config,
                 move |data: &[u16], _: &_| {
-                    if !rec.load(Ordering::Relaxed) {
-                        return;
-                    }
                     let mut b = buf.lock().unwrap();
                     for frame in data.chunks(channels) {
                         let mono: f32 = frame
