@@ -49,6 +49,7 @@ A plain-language record of what's been done, what works, what doesn't, and why w
 | v0.1.8 | Mic stream opens on record-start, closes on record-stop. | macOS orange indicator now only shows during actual recording. Important for a medical product — privacy expectation. |
 | v0.1.9 | Switched biasing prompt from 287-term list to ~150-word medical prose. | Whisper warned `too many resulting tokens: 1527 (max 1024)` — most of our term list was being silently dropped. Prose packs more medical signal into fewer tokens because Whisper biases on style + vocabulary together. |
 | v0.1.10 | `/ponytail-review` cleanup: -25 net lines. Header doc, prompt truncate, hotkey listener Arc/clones, dedup helper, inlined `num_cpus_safe`. | Lazy senior-dev pass. No behavior change. Skipped the I16/U16 sample-format deletion (kept for v0.2 Linux/Win). |
+| v0.2-phaseA | `AtlasDictation.app` bundle (Info.plist, Contents/Resources, ad-hoc codesign). `resolve()` picks bundle path or dev path. `LSUIElement=YES`. Stderr → `~/Library/Logs/AtlasDictation/dictation.log` when bundled. | Tried to wrap as a real Mac app. **Parked.** Bundle launches and the binary runs (log proves it reaches "Ready"), but: (1) no Accessibility grant on the new binary's signature means hotkeys silently don't fire; (2) `LSUIElement=YES` hides app from Force Quit so user has no quit affordance; (3) "not responding" cosmetic dialog from macOS expecting an AppKit run loop. Needs a proper NSApplication + status-bar icon — that's v0.2 phaseB work, not what we have now. For day-to-day use, `Start AIC Dictation.command` is the working launcher. |
 
 ---
 
@@ -72,8 +73,8 @@ A plain-language record of what's been done, what works, what doesn't, and why w
 
 In rough priority order:
 
-1. **Wrap as a proper `.app` bundle.** `Info.plist`, mic + accessibility usage strings, binary at `Contents/MacOS/`, model + dictionary at `Contents/Resources/`. Result: drag-into-Applications, double-click to launch, no Terminal involved.
-2. **Menubar icon** (option E from the brainstorm). Monochrome mic glyph per Apple HIG, subtle pulse during recording, dropdown menu with Quit + About + Edit Dictionary.
+1. **Wrap as a proper `.app` bundle WITH AppKit integration.** The bare bundle attempted in v0.2-phaseA isn't enough — macOS expects an NSApplication run loop, otherwise: hotkeys silently fail without Accessibility grant on the new binary, "not responding" dialogs appear, `LSUIElement=YES` removes Force Quit visibility. Real fix: integrate NSApplication + a status bar item (NSStatusItem) with a Quit menu. Hotkey listener and audio capture move to a background thread; the main thread runs the Cocoa event loop. ~2-3 hours.
+2. **Menubar icon** (option E from the brainstorm). Folds into item 1 — same NSStatusItem provides both the status indicator and the Quit menu. Monochrome mic glyph per Apple HIG, subtle pulse during recording.
 3. **Suppress tilde character.** Replace `rdev::listen` with Core Graphics event tap in active mode so the `` ` `` keypress is swallowed and doesn't print into the focused app.
 4. **App icon** — inspired audio-waveform variant of the Atlas Intensive Care logo (navy + rust palette, squircle frame, but waveform instead of EKG line).
 5. **GitHub Actions** to build `.dmg` for Mac, attach to a Release with the bundled model.
