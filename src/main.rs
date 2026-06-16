@@ -31,7 +31,14 @@ use regex::Regex;
 const MODEL_PATH: &str = "models/ggml-large-v3-turbo.bin";
 const DICT_PATH: &str = "assets/medical-dictionary.txt";
 const RECORD_KEY: RKey = RKey::BackQuote;
+const PASTE_KEY: RKey = RKey::AltGr; // Right Option on Mac; Right Alt on Win/Linux
 const TARGET_SR: u32 = 16_000;
+
+#[derive(Debug, Clone, Copy)]
+enum Cmd {
+    ToggleRecord,
+    RepasteLast,
+}
 
 fn main() -> Result<()> {
     eprintln!("Atlas Intensive Care Dictation v0.1");
@@ -89,20 +96,23 @@ fn main() -> Result<()> {
     let stream = build_stream(&device, &supported, channels, buffer.clone(), recording.clone())?;
     stream.play().context("failed to start audio stream")?;
 
-    let (tx, rx) = unbounded::<()>();
+    let (tx, rx) = unbounded::<Cmd>();
     spawn_hotkey_listener(tx);
+
+    let last_text: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     eprintln!();
     eprintln!("Ready.");
     eprintln!("  ` (tilde / backtick key)  - start / stop dictation");
+    eprintln!("  Right Option              - re-paste the last dictated transcript");
     eprintln!("  Ctrl-C                    - quit");
     eprintln!();
     eprintln!("HOW TO USE:");
     eprintln!("  1. Click into the app where you want the text (TextEdit, browser, EHR, etc.).");
     eprintln!("  2. Press ` (tilde). Speak. Press ` again.");
     eprintln!("  3. Cleaned text auto-pastes at your cursor.");
-    eprintln!("  4. To paste the same text again somewhere else, just press Cmd+V — it's");
-    eprintln!("     on the clipboard.");
+    eprintln!("  4. To drop the same text somewhere else (e.g. a med list into the chart,");
+    eprintln!("     pharmacy order, and patient handout), click there and press Right Option.");
     eprintln!();
     eprintln!("ONE-TIME SETUP (only on first run):");
     eprintln!("  Accessibility: System Settings -> Privacy & Security -> Accessibility.");
@@ -111,66 +121,85 @@ fn main() -> Result<()> {
     eprintln!();
 
     loop {
-        if rx.recv().is_err() {
-            break;
-        }
+        let cmd = match rx.recv() {
+            Ok(c) => c,
+            Err(_) => break,
+        };
 
-        let was_recording = recording.load(Ordering::Relaxed);
-        if !was_recording {
-            buffer.lock().unwrap().clear();
-            recording.store(true, Ordering::Relaxed);
-            eprintln!("[REC]   speak now... (` again to stop)");
-        } else {
-            recording.store(false, Ordering::Relaxed);
-            eprintln!("[STOP]  transcribing...");
-
-            let raw = {
-                let mut buf = buffer.lock().unwrap();
-                std::mem::take(&mut *buf)
-            };
-            if raw.len() < (input_sr as usize) / 4 {
-                eprintln!("        (too short, skipped)");
-                continue;
-            }
-
-            let samples = resample_linear(&raw, input_sr, TARGET_SR);
-
-            let mut state = ctx.create_state().context("create_state failed")?;
-            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-            params.set_n_threads(num_cpus_safe());
-            params.set_translate(false);
-            params.set_language(Some("en"));
-            params.set_print_special(false);
-            params.set_print_progress(false);
-            params.set_print_realtime(false);
-            params.set_print_timestamps(false);
-            params.set_initial_prompt(&initial_prompt);
-            state.full(params, &samples).context("whisper full() failed")?;
-
-            let n_seg = state.full_n_segments().context("seg count failed")?;
-            let mut text = String::new();
-            for i in 0..n_seg {
-                if let Ok(s) = state.full_get_segment_text(i) {
-                    text.push_str(&s);
+        match cmd {
+            Cmd::RepasteLast => {
+                let stored = last_text.lock().unwrap().clone();
+                match stored {
+                    Some(t) => {
+                        if let Ok(mut cb) = Clipboard::new() {
+                            let _ = cb.set_text(t);
+                        }
+                        match paste_cmd_v() {
+                            Ok(_) => eprintln!("[PASTE] (re-paste at cursor)"),
+                            Err(e) => eprintln!("[PASTE] failed: {e}"),
+                        }
+                    }
+                    None => eprintln!("[PASTE] (nothing dictated yet — press ` to dictate first)"),
                 }
             }
+            Cmd::ToggleRecord => {
+                let was_recording = recording.load(Ordering::Relaxed);
+                if !was_recording {
+                    buffer.lock().unwrap().clear();
+                    recording.store(true, Ordering::Relaxed);
+                    eprintln!("[REC]   speak now... (` again to stop)");
+                } else {
+                    recording.store(false, Ordering::Relaxed);
+                    eprintln!("[STOP]  transcribing...");
 
-            let cleaned = scrub(&text);
-            if cleaned.is_empty() {
-                eprintln!("        (no speech detected)");
-                continue;
-            }
-            eprintln!("        -> \"{}\"", cleaned);
+                    let raw = {
+                        let mut buf = buffer.lock().unwrap();
+                        std::mem::take(&mut *buf)
+                    };
+                    if raw.len() < (input_sr as usize) / 4 {
+                        eprintln!("        (too short, skipped)");
+                        continue;
+                    }
 
-            if let Ok(mut cb) = Clipboard::new() {
-                let _ = cb.set_text(cleaned.clone());
-            }
+                    let samples = resample_linear(&raw, input_sr, TARGET_SR);
 
-            // Auto-paste at the cursor. Text is also on the clipboard, so the user
-            // can Cmd+V it again later if they want it in multiple places.
-            match paste_cmd_v() {
-                Ok(_) => eprintln!("        (typed at cursor. Cmd+V re-pastes from clipboard.)"),
-                Err(e) => eprintln!("        auto-paste failed: {e}. Press Cmd+V to paste manually."),
+                    let mut state = ctx.create_state().context("create_state failed")?;
+                    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+                    params.set_n_threads(num_cpus_safe());
+                    params.set_translate(false);
+                    params.set_language(Some("en"));
+                    params.set_print_special(false);
+                    params.set_print_progress(false);
+                    params.set_print_realtime(false);
+                    params.set_print_timestamps(false);
+                    params.set_initial_prompt(&initial_prompt);
+                    state.full(params, &samples).context("whisper full() failed")?;
+
+                    let n_seg = state.full_n_segments().context("seg count failed")?;
+                    let mut text = String::new();
+                    for i in 0..n_seg {
+                        if let Ok(s) = state.full_get_segment_text(i) {
+                            text.push_str(&s);
+                        }
+                    }
+
+                    let cleaned = scrub(&text);
+                    if cleaned.is_empty() {
+                        eprintln!("        (no speech detected)");
+                        continue;
+                    }
+                    eprintln!("        -> \"{}\"", cleaned);
+
+                    *last_text.lock().unwrap() = Some(cleaned.clone());
+                    if let Ok(mut cb) = Clipboard::new() {
+                        let _ = cb.set_text(cleaned.clone());
+                    }
+
+                    match paste_cmd_v() {
+                        Ok(_) => eprintln!("        (typed at cursor. Right Option re-pastes it.)"),
+                        Err(e) => eprintln!("        auto-paste failed: {e}. Press Cmd+V to paste manually."),
+                    }
+                }
             }
         }
     }
@@ -262,20 +291,29 @@ fn build_stream(
     Ok(stream)
 }
 
-fn spawn_hotkey_listener(tx: Sender<()>) {
+fn spawn_hotkey_listener(tx: Sender<Cmd>) {
     thread::spawn(move || {
-        // Track held-state so we only fire once per press (ignore key-repeat).
-        let held = Arc::new(AtomicBool::new(false));
-        let h = held.clone();
+        let rec_held = Arc::new(AtomicBool::new(false));
+        let paste_held = Arc::new(AtomicBool::new(false));
+        let rh = rec_held.clone();
+        let ph = paste_held.clone();
         let tx_clone = tx.clone();
         if let Err(e) = listen(move |event: Event| match event.event_type {
             EventType::KeyPress(k) if k == RECORD_KEY => {
-                if !h.swap(true, Ordering::Relaxed) {
-                    let _ = tx_clone.send(());
+                if !rh.swap(true, Ordering::Relaxed) {
+                    let _ = tx_clone.send(Cmd::ToggleRecord);
                 }
             }
             EventType::KeyRelease(k) if k == RECORD_KEY => {
-                h.store(false, Ordering::Relaxed);
+                rh.store(false, Ordering::Relaxed);
+            }
+            EventType::KeyPress(k) if k == PASTE_KEY => {
+                if !ph.swap(true, Ordering::Relaxed) {
+                    let _ = tx_clone.send(Cmd::RepasteLast);
+                }
+            }
+            EventType::KeyRelease(k) if k == PASTE_KEY => {
+                ph.store(false, Ordering::Relaxed);
             }
             _ => {}
         }) {

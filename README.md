@@ -54,7 +54,7 @@ cargo build --release
 3. **Click into the app where you want the text** (TextEdit, browser, EHR, anything with a text field).
 4. Press **`** (tilde / backtick key, top-left of keyboard) → `[REC]`. Talk.
 5. Press **`** again → transcribes, scrubs *uh/um*, **auto-pastes at your cursor**.
-6. The text is also on the clipboard — press **Cmd+V** to paste it again somewhere else.
+6. To drop the same text somewhere else (e.g. a medication list into the chart, the pharmacy order, and the patient handout), click there and press **Right Option** — re-pastes from the in-app buffer. Cmd+V works too, as long as nothing else has overwritten the clipboard.
 
 ## Disclaimer (please read once)
 
