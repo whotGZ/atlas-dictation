@@ -11,9 +11,9 @@
     <key>CFBundleDisplayName</key>
     <string>Atlas Dictation</string>
     <key>CFBundleVersion</key>
-    <string>0.1.10</string>
+    <string>0.2.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.10</string>
+    <string>0.2.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>
