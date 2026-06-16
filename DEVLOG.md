@@ -3,8 +3,8 @@
 A plain-language record of what's been done, what works, what doesn't, and why we made the choices we did. Lives alongside the code so it survives any session, any tool, any restart.
 
 - **Born:** 15 June 2026 (Somvati Amavasya, Adhik Maas)
-- **Current version:** v0.1.9
-- **Status:** Working Rust binary on Mac, launched via Terminal. NOT yet wrapped as a real `.app`. NOT yet pushed to GitHub.
+- **Current version:** v0.1.10
+- **Status:** Working Rust binary on **macOS (Apple Silicon) only**, launched via Terminal. NOT yet wrapped as a real `.app`. NOT yet pushed to GitHub. Linux + Windows compile won't work today (afplay, /System/Library/Sounds, Cmd-V paste, Accessibility permission flow are all macOS-specific).
 - **Build location:** `/Users/arun/C BHAIYA/atlas-dictation/`
 
 ---
@@ -48,6 +48,7 @@ A plain-language record of what's been done, what works, what doesn't, and why w
 | v0.1.7 | Start/stop sound cues (Pop / Glass). | Audio feedback so users know recording is live without watching the terminal. |
 | v0.1.8 | Mic stream opens on record-start, closes on record-stop. | macOS orange indicator now only shows during actual recording. Important for a medical product — privacy expectation. |
 | v0.1.9 | Switched biasing prompt from 287-term list to ~150-word medical prose. | Whisper warned `too many resulting tokens: 1527 (max 1024)` — most of our term list was being silently dropped. Prose packs more medical signal into fewer tokens because Whisper biases on style + vocabulary together. |
+| v0.1.10 | `/ponytail-review` cleanup: -25 net lines. Header doc, prompt truncate, hotkey listener Arc/clones, dedup helper, inlined `num_cpus_safe`. | Lazy senior-dev pass. No behavior change. Skipped the I16/U16 sample-format deletion (kept for v0.2 Linux/Win). |
 
 ---
 

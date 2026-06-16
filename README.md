@@ -2,6 +2,8 @@
 
 **Local medical dictation. Nothing leaves your device.**
 
+> **Platform: macOS (Apple Silicon) only.** Linux and Windows ports planned for v0.2 but not yet built — the source will not compile on those platforms today.
+
 A small, fast speech-to-text tool for clinicians. Hold a hotkey, talk, get a clean transcript pasted at your cursor. Uses [whisper.cpp](https://github.com/ggerganov/whisper.cpp) with the Whisper Turbo model running 100% on your machine — no cloud, no accounts, no telemetry. Ships with a built-in medical vocabulary so it spells *cholecystitis*, *sphincterotomy*, *choledocholithiasis*, and friends correctly.
 
 Built by **Atlas Management Consulting** as part of our practice-efficiency suite.
@@ -19,7 +21,7 @@ Cloud dictation services send your patient audio to a third party. They want a B
 
 ## Status
 
-v0.1 — Mac (Apple Silicon) only. Linux + Windows builds coming.
+**v0.1.10 — macOS (Apple Silicon) only.** The current build hard-depends on macOS-specific bits (the `afplay` system sound player, the `/System/Library/Sounds/` paths, Apple's Accessibility permission model, Cmd-V paste keystroke). It will compile and run on a Mac and nowhere else right now. Linux + Windows ports are on the v0.2 roadmap, including the cross-platform sample-format handling we currently keep around for that eventual port.
 
 ## Install
 
