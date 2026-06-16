@@ -1,8 +1,13 @@
 // Atlas Intensive Care Dictation
 // Local medical speech-to-text. No network calls, ever.
 //
-// Hotkey: F9 toggles recording.
-// Press F9 -> "REC". Talk. Press F9 again -> transcribes, scrubs fillers, pastes at cursor.
+// Hotkeys:
+//   ` (tilde key)  - toggle recording. Press once to start, again to stop.
+//   Caps Lock      - paste the last dictated text wherever your cursor is.
+//
+// Flow: press ` -> "REC". Talk. Press ` again -> transcribes, scrubs fillers,
+// puts the cleaned text on the clipboard. Move cursor to any app (EHR, browser,
+// Notes, Word), press Caps Lock to paste.
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -25,12 +30,27 @@ use regex::Regex;
 
 const MODEL_PATH: &str = "models/ggml-large-v3-turbo.bin";
 const DICT_PATH: &str = "assets/medical-dictionary.txt";
-const HOTKEY: RKey = RKey::F9;
+const RECORD_KEY: RKey = RKey::BackQuote;
+const PASTE_KEY: RKey = RKey::CapsLock;
 const TARGET_SR: u32 = 16_000;
+
+#[derive(Debug, Clone, Copy)]
+enum Cmd {
+    ToggleRecord,
+    PasteClipboard,
+}
 
 fn main() -> Result<()> {
     eprintln!("Atlas Intensive Care Dictation v0.1");
     eprintln!("====================================");
+    eprintln!();
+    eprintln!("NOTICE: This is a local dictation shell around whisper.cpp (Turbo model)");
+    eprintln!("with a curated medical vocabulary. Speech recognition is not perfect.");
+    eprintln!("You are responsible for proofreading every transcript before it is used");
+    eprintln!("for patient care, billing, legal records, or any other consequential");
+    eprintln!("purpose. By using this software you accept that responsibility.");
+    eprintln!("See DISCLAIMER.md for full terms.");
+    eprintln!();
 
     if !Path::new(MODEL_PATH).exists() {
         anyhow::bail!(
@@ -74,72 +94,93 @@ fn main() -> Result<()> {
     let stream = build_stream(&device, &supported, channels, buffer.clone(), recording.clone())?;
     stream.play().context("failed to start audio stream")?;
 
-    let (tx, rx) = unbounded::<()>();
+    let (tx, rx) = unbounded::<Cmd>();
     spawn_hotkey_listener(tx);
 
     eprintln!();
-    eprintln!("Ready. Press F9 to toggle recording. Ctrl-C to quit.");
-    eprintln!("(macOS will prompt for Accessibility permission on first F9 press.)");
+    eprintln!("Ready.");
+    eprintln!("  ` (tilde key)  - start/stop dictation");
+    eprintln!("  Caps Lock      - paste last dictated text");
+    eprintln!("  Ctrl-C         - quit");
+    eprintln!();
+    eprintln!("First-run permissions (REQUIRED — without these, hotkeys + paste do nothing):");
+    eprintln!("  1. Microphone: macOS will ask -> click Allow.");
+    eprintln!("  2. Accessibility: System Settings -> Privacy & Security -> Accessibility.");
+    eprintln!("     Add Terminal (or whatever app launched this) and toggle it ON.");
+    eprintln!("     Quit and re-launch this app after granting.");
+    eprintln!("  Tip: in System Settings -> Keyboard -> Modifier Keys, set Caps Lock to");
+    eprintln!("       'No Action' so it stops toggling caps when used as paste.");
     eprintln!();
 
     loop {
-        rx.recv().ok();
+        let cmd = match rx.recv() {
+            Ok(c) => c,
+            Err(_) => break,
+        };
 
-        let was_recording = recording.load(Ordering::Relaxed);
-        if !was_recording {
-            buffer.lock().unwrap().clear();
-            recording.store(true, Ordering::Relaxed);
-            eprintln!("[REC]   speak now... (F9 again to stop)");
-        } else {
-            recording.store(false, Ordering::Relaxed);
-            eprintln!("[STOP]  transcribing...");
-
-            let raw = {
-                let mut buf = buffer.lock().unwrap();
-                std::mem::take(&mut *buf)
-            };
-            if raw.len() < (input_sr as usize) / 4 {
-                eprintln!("        (too short, skipped)");
-                continue;
-            }
-
-            let samples = resample_linear(&raw, input_sr, TARGET_SR);
-
-            let mut state = ctx.create_state().context("create_state failed")?;
-            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-            params.set_n_threads(num_cpus_safe());
-            params.set_translate(false);
-            params.set_language(Some("en"));
-            params.set_print_special(false);
-            params.set_print_progress(false);
-            params.set_print_realtime(false);
-            params.set_print_timestamps(false);
-            params.set_initial_prompt(&initial_prompt);
-            state.full(params, &samples).context("whisper full() failed")?;
-
-            let n_seg = state.full_n_segments().context("seg count failed")?;
-            let mut text = String::new();
-            for i in 0..n_seg {
-                if let Ok(s) = state.full_get_segment_text(i) {
-                    text.push_str(&s);
+        match cmd {
+            Cmd::PasteClipboard => {
+                if let Err(e) = paste_cmd_v() {
+                    eprintln!("        paste failed: {e}. Press Cmd-V manually.");
                 }
             }
+            Cmd::ToggleRecord => {
+                let was_recording = recording.load(Ordering::Relaxed);
+                if !was_recording {
+                    buffer.lock().unwrap().clear();
+                    recording.store(true, Ordering::Relaxed);
+                    eprintln!("[REC]   speak now... (` again to stop)");
+                } else {
+                    recording.store(false, Ordering::Relaxed);
+                    eprintln!("[STOP]  transcribing...");
 
-            let cleaned = scrub(&text);
-            if cleaned.is_empty() {
-                eprintln!("        (no speech detected)");
-                continue;
-            }
-            eprintln!("        -> \"{}\"", cleaned);
+                    let raw = {
+                        let mut buf = buffer.lock().unwrap();
+                        std::mem::take(&mut *buf)
+                    };
+                    if raw.len() < (input_sr as usize) / 4 {
+                        eprintln!("        (too short, skipped)");
+                        continue;
+                    }
 
-            if let Ok(mut cb) = Clipboard::new() {
-                let _ = cb.set_text(cleaned.clone());
-            }
-            if let Err(e) = paste_cmd_v() {
-                eprintln!("        paste failed: {e}. Text is on the clipboard; press Cmd-V to insert.");
+                    let samples = resample_linear(&raw, input_sr, TARGET_SR);
+
+                    let mut state = ctx.create_state().context("create_state failed")?;
+                    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+                    params.set_n_threads(num_cpus_safe());
+                    params.set_translate(false);
+                    params.set_language(Some("en"));
+                    params.set_print_special(false);
+                    params.set_print_progress(false);
+                    params.set_print_realtime(false);
+                    params.set_print_timestamps(false);
+                    params.set_initial_prompt(&initial_prompt);
+                    state.full(params, &samples).context("whisper full() failed")?;
+
+                    let n_seg = state.full_n_segments().context("seg count failed")?;
+                    let mut text = String::new();
+                    for i in 0..n_seg {
+                        if let Ok(s) = state.full_get_segment_text(i) {
+                            text.push_str(&s);
+                        }
+                    }
+
+                    let cleaned = scrub(&text);
+                    if cleaned.is_empty() {
+                        eprintln!("        (no speech detected)");
+                        continue;
+                    }
+                    eprintln!("        -> \"{}\"", cleaned);
+                    eprintln!("        (on clipboard. Press Caps Lock to paste.)");
+
+                    if let Ok(mut cb) = Clipboard::new() {
+                        let _ = cb.set_text(cleaned.clone());
+                    }
+                }
             }
         }
     }
+    Ok(())
 }
 
 fn build_stream(
@@ -227,24 +268,36 @@ fn build_stream(
     Ok(stream)
 }
 
-fn spawn_hotkey_listener(tx: Sender<()>) {
+fn spawn_hotkey_listener(tx: Sender<Cmd>) {
     thread::spawn(move || {
-        let last = Arc::new(AtomicBool::new(false));
-        let last_clone = last.clone();
+        // Track held-state per key so we only fire once per press (ignore key-repeat).
+        let record_held = Arc::new(AtomicBool::new(false));
+        let paste_held = Arc::new(AtomicBool::new(false));
+        let rh = record_held.clone();
+        let ph = paste_held.clone();
         let tx_clone = tx.clone();
         if let Err(e) = listen(move |event: Event| match event.event_type {
-            EventType::KeyPress(k) if k == HOTKEY => {
-                if !last_clone.swap(true, Ordering::Relaxed) {
-                    let _ = tx_clone.send(());
+            EventType::KeyPress(k) if k == RECORD_KEY => {
+                if !rh.swap(true, Ordering::Relaxed) {
+                    let _ = tx_clone.send(Cmd::ToggleRecord);
                 }
             }
-            EventType::KeyRelease(k) if k == HOTKEY => {
-                last_clone.store(false, Ordering::Relaxed);
+            EventType::KeyRelease(k) if k == RECORD_KEY => {
+                rh.store(false, Ordering::Relaxed);
+            }
+            EventType::KeyPress(k) if k == PASTE_KEY => {
+                if !ph.swap(true, Ordering::Relaxed) {
+                    let _ = tx_clone.send(Cmd::PasteClipboard);
+                }
+            }
+            EventType::KeyRelease(k) if k == PASTE_KEY => {
+                ph.store(false, Ordering::Relaxed);
             }
             _ => {}
         }) {
             eprintln!("hotkey listener failed: {e:?}");
-            eprintln!("Grant Accessibility permission in System Settings -> Privacy & Security.");
+            eprintln!("Grant Accessibility permission in System Settings -> Privacy & Security -> Accessibility.");
+            eprintln!("Then quit (Ctrl-C) and re-launch this app.");
         }
     });
 }

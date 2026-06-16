@@ -47,11 +47,20 @@ cargo build --release
 
 ## Use
 
-1. Run `atlas-dictation`. It loads the model and waits.
-2. macOS will prompt for **Accessibility** permission the first time you press the hotkey — grant it (required for global hotkeys and paste-at-cursor).
-3. Open any app where you want to type (Notes, your EHR, TextEdit).
-4. Press **F9** → status shows `[REC]`. Talk.
-5. Press **F9** again → transcribes, scrubs out *uh/um*, pastes clean text at your cursor.
+1. Run `atlas-dictation` (or double-click `Start AIC Dictation.command`). It loads the model and waits.
+2. First run, grant two macOS permissions:
+   - **Microphone** — popup on first ` press
+   - **Accessibility** — System Settings → Privacy & Security → Accessibility → add Terminal (or whatever launched the app) and toggle it on. Quit and relaunch the app after granting.
+3. Press **`** (tilde key, top-left of keyboard) → `[REC]`. Talk.
+4. Press **`** again → transcribes, scrubs *uh/um*, puts cleaned text on your clipboard.
+5. Move your cursor to any app (EHR, browser, Notes, Word, anything with a text field).
+6. Press **Caps Lock** → text pastes at the cursor.
+
+**Tip:** in System Settings → Keyboard → Modifier Keys, set Caps Lock to "No Action" so it stops toggling caps when you use it as paste.
+
+## Disclaimer (please read once)
+
+This software is **not** a medical device, **not** FDA-cleared, and makes **no** accuracy guarantee. Speech recognition produces errors — including misspelled medications, wrong dosages, dropped negations, and misheard numbers. **You are solely responsible for proofreading every transcript** before it is used for patient care, billing, legal records, or any other consequential purpose. By using this software you accept that responsibility. Full terms in [DISCLAIMER.md](DISCLAIMER.md).
 
 ## Customizing the dictionary
 
