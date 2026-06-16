@@ -51,7 +51,7 @@ cargo build --release
 2. First run, grant two macOS permissions:
    - **Microphone** — popup on first ` press
    - **Accessibility** — System Settings → Privacy & Security → Accessibility → add Terminal (or whatever launched the app) and toggle it on. Quit and relaunch the app after granting.
-3. Press **`** (tilde key, top-left of keyboard) → `[REC]`. Talk.
+3. Press **`** (tilde / backtick key, top-left of keyboard) → `[REC]`. Talk.
 4. Press **`** again → transcribes, scrubs *uh/um*, puts cleaned text on your clipboard.
 5. Move your cursor to any app (EHR, browser, Notes, Word, anything with a text field).
 6. Press **Caps Lock** → text pastes at the cursor.

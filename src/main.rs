@@ -2,7 +2,7 @@
 // Local medical speech-to-text. No network calls, ever.
 //
 // Hotkeys:
-//   ` (tilde key)  - toggle recording. Press once to start, again to stop.
+//   ` (tilde / backtick key)  - toggle recording. Press once to start, again to stop.
 //   Caps Lock      - paste the last dictated text wherever your cursor is.
 //
 // Flow: press ` -> "REC". Talk. Press ` again -> transcribes, scrubs fillers,
@@ -99,7 +99,7 @@ fn main() -> Result<()> {
 
     eprintln!();
     eprintln!("Ready.");
-    eprintln!("  ` (tilde key)  - start/stop dictation");
+    eprintln!("  ` (tilde / backtick key)  - start/stop dictation");
     eprintln!("  Caps Lock      - paste last dictated text");
     eprintln!("  Ctrl-C         - quit");
     eprintln!();
