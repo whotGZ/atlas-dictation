@@ -22,13 +22,15 @@ Cloud dictation services send your patient audio to a third party. They want a B
 
 ## Status
 
-**v0.1.10 — macOS (Apple Silicon) only.** The current build hard-depends on macOS-specific bits (the `afplay` system sound player, the `/System/Library/Sounds/` paths, Apple's Accessibility permission model, Cmd-V paste keystroke). It will compile and run on a Mac and nowhere else right now. Linux + Windows ports are on the v0.2 roadmap, including the cross-platform sample-format handling we currently keep around for that eventual port.
+**v0.2.0 — macOS (Apple Silicon) only.** Real `.app` bundle with a menubar icon and a Quit menu. The current build hard-depends on macOS-specific bits (`afplay`, `/System/Library/Sounds/`, Accessibility permission model, Cmd-V paste, Core Graphics event tap). Linux + Windows ports are on the v0.3 roadmap.
 
 ## Install
 
-### One-click installer (recommended for non-developers)
+### Pre-built installer (recommended)
 
-→ Coming soon at [atlasmc.com](#) (paid, ~$5, supports development).
+Download `AtlasDictation-0.2.0.dmg` from the [latest Release](https://github.com/whotGZ/atlas-dictation/releases). Open the DMG, drag **AtlasDictation** onto the **Applications** alias, eject.
+
+First launch: right-click → Open (bypasses Gatekeeper for ad-hoc-signed builds). Grant **Microphone** when prompted. Then open **System Settings → Privacy & Security → Accessibility**, click **+**, add Atlas Dictation, toggle it ON. Quit from the menu-bar icon and re-launch.
 
 ### Build from source (free, requires Rust)
 
@@ -41,22 +43,20 @@ cd atlas-dictation
 curl -L -o models/ggml-large-v3-turbo.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
 
-# Build
-cargo build --release
-
-# Run
-./target/release/atlas-dictation
+# Build the .app bundle
+./build-app.sh
+open dist/AtlasDictation.app
 ```
 
 ## Use
 
-1. Run `atlas-dictation` (or double-click `Start AIC Dictation.command`). It loads the model and waits.
-2. First run, grant two macOS permissions:
-   - **Microphone** — popup on first ` press
-   - **Accessibility** — System Settings → Privacy & Security → Accessibility → add Terminal (or whatever launched the app) and toggle it on. Quit and relaunch the app after granting.
-3. **Click into the app where you want the text** (TextEdit, browser, EHR, anything with a text field).
-4. Press **`** (tilde / backtick key, top-left of keyboard) → `[REC]`. Talk.
-5. Press **`** again → transcribes, scrubs *uh/um*, **auto-pastes at your cursor**.
+1. Launch Atlas Dictation. After ~5 seconds the audio-bars icon appears in the top-right menu bar.
+2. **Click into the app where you want the text** (TextEdit, browser, EHR, anything with a text field).
+3. Press **`** (tilde / backtick key, top-left of keyboard). Pop sound = recording.
+4. Speak.
+5. Press **`** again. Glass sound = transcribing. Cleaned text auto-pastes at your cursor.
+6. **Right Option** re-pastes the last transcript anywhere — drop a med list into the chart, the pharmacy order, and the patient handout without re-dictating.
+7. Quit via the menu-bar icon → "Quit Atlas Dictation".
 6. To drop the same text somewhere else (e.g. a medication list into the chart, the pharmacy order, and the patient handout), click there and press **Right Option** — re-pastes from the in-app buffer. Cmd+V works too, as long as nothing else has overwritten the clipboard.
 
 ## Disclaimer (please read once)
