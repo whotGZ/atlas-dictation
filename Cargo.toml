@@ -16,6 +16,9 @@ enigo = "0.2"
 regex = "1"
 anyhow = "1"
 crossbeam-channel = "0.5"
+tao = "0.30"
+tray-icon = "0.19"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
