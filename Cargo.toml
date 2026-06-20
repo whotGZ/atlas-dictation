@@ -8,7 +8,10 @@ authors = ["Atlas Management Consulting"]
 repository = "https://github.com/whotGZ/atlas-dictation"
 
 [dependencies]
-whisper-rs = { version = "0.16", features = ["metal"] }
+# Base whisper-rs has no GPU feature → CPU/BLAS everywhere by default. macOS
+# adds the `metal` feature below (Cargo unions features per-target). Windows/
+# Linux GPU (cuda/vulkan) can be opted in later as a build feature.
+whisper-rs = "0.16"
 cpal = "0.15"
 arboard = "3"
 regex = "1"
@@ -19,9 +22,19 @@ tray-icon = "0.19"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
+whisper-rs = { version = "0.16", features = ["metal"] }
 core-foundation = "0.9"
 core-graphics = "0.23"
+
+# isatty/dup2 stderr→logfile redirect on macOS + Linux.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Windows + Linux use rdev for both the global hotkey (listen) and paste
+# (simulate Ctrl+V). The hotkey is a non-printing key we never suppress, so a
+# listen-only library is enough — no need for the macOS CGEventTap there.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+rdev = "0.5"
 
 [profile.release]
 opt-level = 3

@@ -53,7 +53,9 @@ const HISTORY_PRUNE_EVERY_SECS: u64 = 60;
 // macOS ignores our event tap nothing can ever be typed into the focused app.
 // It's deliberately NOT Control/Command/Fn — those are reserved by the system's
 // own Dictation "press-twice" shortcut.
+#[cfg(target_os = "macos")]
 const KC_RIGHT_OPTION: i64 = 61;   // kVK_RightOption
+#[cfg(target_os = "macos")]
 const FLAG_RIGHT_OPTION_BIT: u64 = 0x00000040; // NX_DEVICERALTKEYMASK
 // A tap = press and release within this window with no other key in between.
 // Holding ⌥ longer (e.g. to type ø, ¬) is not a tap and won't toggle.
@@ -104,7 +106,7 @@ fn main() -> Result<()> {
     let (tx_cmd, rx_cmd) = unbounded::<Cmd>();
     let (tx_state, rx_state) = unbounded::<TrayState>();
 
-    spawn_event_tap(tx_cmd.clone());
+    spawn_hotkey(tx_cmd.clone());
 
     let tx_state_pipeline = tx_state.clone();
     thread::spawn(move || {
@@ -456,10 +458,43 @@ fn find_input_by_substr(host: &cpal::Host, want: &str) -> Option<cpal::Device> {
 /// Where the tray mic-picker's choice persists. Plain text (one device name),
 /// no JSON dep needed for a single value. ponytail: text file, not a config DB.
 fn mic_pref_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(format!(
-        "{home}/Library/Application Support/AtlasDictation/selected-mic.txt"
-    ))
+    app_data_dir().join("selected-mic.txt")
+}
+
+/// Home directory, cross-platform (HOME on unix, USERPROFILE on Windows).
+fn home_dir() -> String {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default()
+}
+
+/// Per-OS directory for app settings (e.g. the saved mic). Caller creates it.
+fn app_data_dir() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    return PathBuf::from(format!("{}/Library/Application Support/AtlasDictation", home_dir()));
+    #[cfg(target_os = "windows")]
+    return PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| home_dir()))
+        .join("AtlasDictation");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    return PathBuf::from(
+        std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{}/.local/share", home_dir())),
+    )
+    .join("AtlasDictation");
+}
+
+/// Per-OS directory for logs + transcript history. Caller creates it.
+fn app_log_dir() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    return PathBuf::from(format!("{}/Library/Logs/AtlasDictation", home_dir()));
+    #[cfg(target_os = "windows")]
+    return PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_else(|_| home_dir()))
+        .join("AtlasDictation")
+        .join("logs");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    return PathBuf::from(
+        std::env::var("XDG_STATE_HOME").unwrap_or_else(|_| format!("{}/.local/state", home_dir())),
+    )
+    .join("AtlasDictation");
 }
 
 fn saved_mic_pref() -> Option<String> {
@@ -569,15 +604,51 @@ fn build_stream(
     Ok(stream)
 }
 
-// ─── Hotkey listener: Core Graphics event tap ────────────────────────────────
-//
-//   - We watch Right Option (a modifier) and ALWAYS pass it through — we never
-//     swallow it. Because it's non-printing, a passed-through tap can't leave a
-//     stray character even if macOS ignores our return value. This is the whole
-//     reason the hotkey is a modifier and not a printable key like the tilde.
-//   - The tap runs on its own thread driving a CFRunLoop. macOS delivers
-//     events from the kernel into that run loop.
+// ─── Hotkey listener ─────────────────────────────────────────────────────────
+// Record toggle = a single quick tap of the Right Option / Right Alt key (a
+// non-printing modifier, so a passed-through tap can never type a stray char).
+//   - macOS: a Core Graphics event tap on its own CFRunLoop (below).
+//   - Windows/Linux: rdev::listen (listen-only is fine — we never suppress).
 
+#[cfg(target_os = "macos")]
+fn spawn_hotkey(tx: Sender<Cmd>) {
+    spawn_event_tap(tx);
+}
+
+/// Windows/Linux hotkey via rdev. Detects a clean quick tap of Right Alt
+/// (rdev `Key::AltGr` — the key the macOS build calls Right Option). Any other
+/// key pressed while it's held cancels the tap, so Alt-combos don't toggle.
+#[cfg(not(target_os = "macos"))]
+fn spawn_hotkey(tx: Sender<Cmd>) {
+    use rdev::{listen, EventType, Key};
+    thread::spawn(move || {
+        let mut pressed_at: Option<Instant> = None;
+        let mut tap_candidate = false;
+        let cb = move |event: rdev::Event| match event.event_type {
+            EventType::KeyPress(Key::AltGr) => {
+                pressed_at = Some(Instant::now());
+                tap_candidate = true;
+            }
+            EventType::KeyRelease(Key::AltGr) => {
+                let quick = pressed_at
+                    .map(|t| t.elapsed().as_millis() <= TAP_MAX_MS)
+                    .unwrap_or(false);
+                if tap_candidate && quick {
+                    let _ = tx.send(Cmd::ToggleRecord);
+                }
+                tap_candidate = false;
+            }
+            EventType::KeyPress(_) => tap_candidate = false, // a combo, not a solo tap
+            _ => {}
+        };
+        if let Err(e) = listen(cb) {
+            eprintln!("Hotkey listener failed: {e:?}");
+            eprintln!("On Linux this needs X11 (Wayland global hotkeys are not supported).");
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
 fn spawn_event_tap(tx: Sender<Cmd>) {
     thread::spawn(move || {
         use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
@@ -667,20 +738,20 @@ fn spawn_event_tap(tx: Sender<Cmd>) {
 /// When launched as a `.app` (no Terminal), redirect stderr to a log file so
 /// the [REC]/[STOP]/transcript output is recoverable. Tail with:
 ///   tail -f ~/Library/Logs/AtlasDictation/dictation.log
+#[cfg(unix)]
 fn redirect_stderr_when_bundled() {
-    let in_bundle = std::env::current_exe()
-        .map(|p| p.to_string_lossy().contains(".app/Contents/MacOS"))
-        .unwrap_or(false);
-    if !in_bundle {
-        return;
+    // When launched from the GUI (no controlling terminal) stderr goes nowhere,
+    // so point it at a logfile. `isatty(2)` is the portable "are we in a
+    // terminal?" check — covers a macOS .app and a Linux desktop launch alike.
+    if unsafe { libc::isatty(2) } == 1 {
+        return; // running in a terminal — leave stderr on screen
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    let dir = format!("{home}/Library/Logs/AtlasDictation");
+    let dir = app_log_dir();
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(format!("{dir}/dictation.log"))
+        .open(dir.join("dictation.log"))
     {
         use std::os::unix::io::AsRawFd;
         unsafe { libc::dup2(f.as_raw_fd(), 2); }
@@ -688,17 +759,32 @@ fn redirect_stderr_when_bundled() {
     }
 }
 
-/// Prefer the `.app` bundle's Contents/Resources/<name>, fall back to the
-/// dev-mode project-relative path. Same binary works in `cargo run` and inside
-/// AtlasDictation.app.
+#[cfg(windows)]
+fn redirect_stderr_when_bundled() {
+    // ponytail: Windows GUI stderr redirect needs freopen/AllocConsole gymnastics;
+    // skip for the first cross-platform cut. Run from a console to see logs.
+}
+
+/// Find a bundled resource. Checks, in order: the macOS `.app/Contents/
+/// Resources/`, the directory next to the executable (how Windows/Linux ship —
+/// model + assets sit beside the .exe / binary), a `resources/` subdir there,
+/// then the dev-mode project-relative path. Same binary works in `cargo run`
+/// and inside any packaged form.
 fn resolve(bundle_name: &str, dev_path: &str) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(macos) = exe.parent() {
-            if let Some(contents) = macos.parent() {
-                let p = contents.join("Resources").join(bundle_name);
-                if p.exists() {
-                    return p;
-                }
+        let exe_dir = exe.parent().map(|p| p.to_path_buf());
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        if let Some(dir) = &exe_dir {
+            // macOS: exe is .../Contents/MacOS/<bin> → ../Resources/<name>
+            if let Some(contents) = dir.parent() {
+                candidates.push(contents.join("Resources").join(bundle_name));
+            }
+            candidates.push(dir.join(bundle_name));
+            candidates.push(dir.join("resources").join(bundle_name));
+        }
+        for c in candidates {
+            if c.exists() {
+                return c;
             }
         }
     }
@@ -712,10 +798,20 @@ fn resolve(bundle_name: &str, dev_path: &str) -> PathBuf {
 /// forced CPU-only earlier is gone in whisper-rs 0.13.2 — verified by a clean
 /// Metal load (no JIT error, `use gpu = 1`) on the M1 Ultra 2026-06-20.
 /// ponytail: when the Linux/Windows port lands, branch here for CUDA/Vulkan/CPU.
+#[cfg(target_os = "macos")]
 fn pick_backend() -> (bool, String) {
     (true, format!("Metal GPU, {}", cpu_brand()))
 }
 
+/// Windows/Linux: CPU/BLAS by default. A CUDA/Vulkan build can flip this on
+/// later via a cargo feature; for now the portable baseline is CPU, which runs
+/// on every machine with no GPU driver requirements.
+#[cfg(not(target_os = "macos"))]
+fn pick_backend() -> (bool, String) {
+    (false, "CPU/BLAS".to_string())
+}
+
+#[cfg(target_os = "macos")]
 fn cpu_brand() -> String {
     Command::new("sysctl")
         .args(["-n", "machdep.cpu.brand_string"])
@@ -727,6 +823,7 @@ fn cpu_brand() -> String {
         .unwrap_or_else(|| "unknown CPU".into())
 }
 
+#[cfg(target_os = "macos")]
 fn play_sound(name: &str) {
     let _ = Command::new("afplay")
         .arg(format!("/System/Library/Sounds/{name}.aiff"))
@@ -735,8 +832,40 @@ fn play_sound(name: &str) {
         .stderr(Stdio::null())
         .spawn();
 }
+#[cfg(target_os = "macos")]
 fn play_start_sound() { play_sound("Pop"); }
+#[cfg(target_os = "macos")]
 fn play_stop_sound() { play_sound("Glass"); }
+
+// Windows: short console beeps via PowerShell (no extra crate needed).
+#[cfg(target_os = "windows")]
+fn beep(freq: u32, ms: u32) {
+    let _ = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &format!("[console]::beep({freq},{ms})")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+#[cfg(target_os = "windows")]
+fn play_start_sound() { beep(880, 110); }
+#[cfg(target_os = "windows")]
+fn play_stop_sound() { beep(520, 150); }
+
+// Linux: best-effort via paplay of a freedesktop sound; silent if unavailable.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_sound(file: &str) {
+    let _ = Command::new("paplay")
+        .arg(format!("/usr/share/sounds/freedesktop/stereo/{file}.oga"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+#[cfg(all(unix, not(target_os = "macos")))]
+fn play_start_sound() { linux_sound("message"); }
+#[cfg(all(unix, not(target_os = "macos")))]
+fn play_stop_sound() { linux_sound("complete"); }
 
 /// Cmd+V via AppleScript / System Events (key code 9 = `v`).
 ///
@@ -748,6 +877,7 @@ fn play_stop_sound() { play_sound("Glass"); }
 ///   - Browsers that drop the first HID-layer keystroke after focus change
 /// OpenWhispr ships the same path. ponytail: replace with a bundled CGEvent
 /// fast-paste helper only if osascript ever shows latency in practice.
+#[cfg(target_os = "macos")]
 fn paste_cmd_v() -> Result<()> {
     if osa_paste()? {
         return Ok(());
@@ -761,6 +891,25 @@ fn paste_cmd_v() -> Result<()> {
     anyhow::bail!("osascript paste returned non-zero twice")
 }
 
+/// Windows/Linux: synthesize Ctrl+V via rdev. The transcript is already on the
+/// clipboard; this just triggers the focused app's paste. (X11 only on Linux;
+/// Wayland blocks synthetic input — there the user pastes with Ctrl+V.)
+#[cfg(not(target_os = "macos"))]
+fn paste_cmd_v() -> Result<()> {
+    use rdev::{simulate, EventType, Key};
+    let tap = |et: EventType| -> Result<()> {
+        simulate(&et).map_err(|e| anyhow::anyhow!("rdev simulate: {e:?}"))?;
+        thread::sleep(Duration::from_millis(20));
+        Ok(())
+    };
+    tap(EventType::KeyPress(Key::ControlLeft))?;
+    tap(EventType::KeyPress(Key::KeyV))?;
+    tap(EventType::KeyRelease(Key::KeyV))?;
+    tap(EventType::KeyRelease(Key::ControlLeft))?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 fn osa_paste() -> Result<bool> {
     let status = Command::new("osascript")
         .args([
@@ -796,8 +945,7 @@ fn env_flag(name: &str) -> bool {
 // full rewrite, not a DB — a 2h window only ever holds a handful of records.
 
 fn transcript_history_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(format!("{home}/Library/Logs/AtlasDictation/transcripts.txt"))
+    app_log_dir().join("transcripts.txt")
 }
 
 fn unix_now() -> u64 {
@@ -807,16 +955,27 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
-/// Local human time for a header line, via BSD `date -r`. Empty on failure —
-/// the machine-readable epoch in the header is what pruning relies on.
+/// Local human time for a header line. macOS/BSD `date -r`, Linux GNU `date -d`,
+/// empty elsewhere — the machine-readable epoch in the header is what pruning
+/// relies on, so the human string is cosmetic and safe to omit.
 fn human_time(epoch: u64) -> String {
-    Command::new("date")
-        .args(["-r", &epoch.to_string(), "+%Y-%m-%d %H:%M:%S"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
+    #[cfg(target_os = "macos")]
+    let args = vec!["-r".to_string(), epoch.to_string(), "+%Y-%m-%d %H:%M:%S".to_string()];
+    #[cfg(target_os = "linux")]
+    let args = vec![format!("-d@{epoch}"), "+%Y-%m-%d %H:%M:%S".to_string()];
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    return String::new();
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        Command::new("date")
+            .args(&args)
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    }
 }
 
 /// Parse history into (epoch, body) records. Header line is
