@@ -18,7 +18,7 @@ Built for clinicians who want efficient note-taking without handing patient audi
 - **Bundled Whisper Turbo model (1.5 GB).** No first-run download.
 - **Bundled medical biasing prompt** — IM, ICU, surgery, OB/GYN, ID, neuro vocabulary baked into Whisper's initial prompt.
 - **Filler scrubber** — strips "uh", "um", "you know", repeated words.
-- **Transcripts never written to disk.** RAM + clipboard only. Diagnostic log records length, not content.
+- **Transcripts kept locally for 2 hours only.** A short rolling history (`~/Library/Logs/AtlasDictation/transcripts.txt`) so a long dictation can't be lost to a clipboard overwrite; auto-deleted after 2h so PHI doesn't linger. Never leaves your Mac. (The diagnostic log still records length, not content.)
 
 ## Install
 

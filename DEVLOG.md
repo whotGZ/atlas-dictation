@@ -3,8 +3,8 @@
 A plain-language record of what's been done, what works, what doesn't, and why we made the choices we did. Lives alongside the code so it survives any session, any tool, any restart.
 
 - **Born:** 15 June 2026 (Somvati Amavasya, Adhik Maas)
-- **Current version:** v0.1.10
-- **Status:** Working Rust binary on **macOS (Apple Silicon) only**, launched via Terminal. NOT yet wrapped as a real `.app`. NOT yet pushed to GitHub. Linux + Windows compile won't work today (afplay, /System/Library/Sounds, Cmd-V paste, Accessibility permission flow are all macOS-specific).
+- **Current version:** v0.3.1
+- **Status:** Working signed `.app` in `/Applications` on **macOS (Apple Silicon) only**, menu-bar utility with a Quit item and a Microphone picker. Stable self-signed identity ("ATLAS Local dev") so Accessibility/mic grants survive rebuilds. NOT yet pushed to GitHub. Linux + Windows compile won't work today (afplay, /System/Library/Sounds, Cmd-V paste, Accessibility permission flow are all macOS-specific).
 - **Build location:** `/Users/arun/C BHAIYA/atlas-dictation/`
 
 ---
@@ -50,6 +50,7 @@ A plain-language record of what's been done, what works, what doesn't, and why w
 | v0.1.9 | Switched biasing prompt from 287-term list to ~150-word medical prose. | Whisper warned `too many resulting tokens: 1527 (max 1024)` — most of our term list was being silently dropped. Prose packs more medical signal into fewer tokens because Whisper biases on style + vocabulary together. |
 | v0.1.10 | `/ponytail-review` cleanup: -25 net lines. Header doc, prompt truncate, hotkey listener Arc/clones, dedup helper, inlined `num_cpus_safe`. | Lazy senior-dev pass. No behavior change. Skipped the I16/U16 sample-format deletion (kept for v0.2 Linux/Win). |
 | v0.2-phaseA | `AtlasDictation.app` bundle (Info.plist, Contents/Resources, ad-hoc codesign). `resolve()` picks bundle path or dev path. `LSUIElement=YES`. Stderr → `~/Library/Logs/AtlasDictation/dictation.log` when bundled. | Tried to wrap as a real Mac app. **Parked.** Bundle launches and the binary runs (log proves it reaches "Ready"), but: (1) no Accessibility grant on the new binary's signature means hotkeys silently don't fire; (2) `LSUIElement=YES` hides app from Force Quit so user has no quit affordance; (3) "not responding" cosmetic dialog from macOS expecting an AppKit run loop. Needs a proper NSApplication + status-bar icon — that's v0.2 phaseB work, not what we have now. For day-to-day use, `Start AIC Dictation.command` is the working launcher. |
+| v0.3.1 | Three reliability/recovery changes. (1) **Transcript history**: every transcript appends to `~/Library/Logs/AtlasDictation/transcripts.txt`, auto-purged after 2h (on append + on the idle tick). (2) **Mic pinned per session** — stopped re-querying the system default on every recording. (3) **Tray "Microphone" picker** — CheckMenuItem per input device, choice persists to `Application Support/AtlasDictation/selected-mic.txt`; resolution priority is `$ATLAS_MIC` → saved choice → system default. Signed with stable "ATLAS Local dev" identity. | A real 450-word dictation was nearly lost: it had been overwritten in clipboard + RAM and the app deliberately never wrote transcripts to disk, so nothing was recoverable. The 2h history is the safety net (short window so PHI doesn't linger). The per-recording mic re-query was *following* the macOS default mid-session and silently feeding near-silence into dictations (captures came back 2–20 chars); pinning fixed it. The picker makes mic selection a first-run menu click instead of an env var — distribution-ready. |
 
 ---
 

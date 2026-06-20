@@ -19,9 +19,18 @@ cp packaging/AppIcon.icns           "$APP/Contents/Resources/AppIcon.icns"
 cp models/ggml-large-v3-turbo.bin   "$APP/Contents/Resources/ggml-large-v3-turbo.bin"
 cp assets/medical-dictionary.txt    "$APP/Contents/Resources/medical-dictionary.txt"
 
-# Ad-hoc sign so Gatekeeper doesn't reject the freshly built bundle outright.
+# Sign with a stable identity so the TCC Accessibility grant survives rebuilds.
+# Prefers the self-signed local cert; falls back to ad-hoc if absent.
 # Replace with a Developer ID signature for distributed builds.
-codesign --force --deep --sign - "$APP" 2>/dev/null || true
+SIGN_IDENTITY="${ATLAS_SIGN_IDENTITY:-ATLAS Local dev}"
+if security find-identity -p codesigning -v | grep -q "$SIGN_IDENTITY"; then
+    codesign --force --deep --sign "$SIGN_IDENTITY" "$APP"
+    echo "Signed with: $SIGN_IDENTITY"
+else
+    codesign --force --deep --sign - "$APP" 2>/dev/null || true
+    echo "WARNING: '$SIGN_IDENTITY' not found in keychain — fell back to ad-hoc."
+    echo "         TCC Accessibility grant will be lost on next rebuild."
+fi
 
 echo
 echo "Built $APP"
