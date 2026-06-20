@@ -8,10 +8,9 @@ authors = ["Atlas Management Consulting"]
 repository = "https://github.com/whotGZ/atlas-dictation"
 
 [dependencies]
-whisper-rs = { version = "0.13", features = ["metal"] }
+whisper-rs = { version = "0.16", features = ["metal"] }
 cpal = "0.15"
 arboard = "3"
-enigo = "0.2"
 regex = "1"
 anyhow = "1"
 crossbeam-channel = "0.5"

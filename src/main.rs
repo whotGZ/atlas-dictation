@@ -1,11 +1,11 @@
 // Atlas Intensive Care Dictation — local medical speech-to-text, no network.
-// ` = record toggle (auto-pastes at cursor on stop). Right Option = re-paste.
+// Single tap of Right Option = record toggle (auto-pastes at cursor on stop).
 //
 // Architecture:
 //   main thread       : tao event loop + NSStatusItem (menubar icon, Quit menu)
-//   hotkey thread     : CGEventTap in active mode (swallows tilde keydown,
-//                       passes Right Option through). Fires Cmd::ToggleRecord
-//                       / Cmd::RepasteLast on its own CFRunLoop.
+//   hotkey thread     : CGEventTap that watches Right Option and passes it
+//                       through untouched. Fires Cmd::ToggleRecord on its own
+//                       CFRunLoop.
 //   pipeline thread   : owns WhisperContext + cpal::Device + state. Processes Cmd.
 
 use anyhow::{Context, Result};
@@ -23,7 +23,6 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 use arboard::Clipboard;
-use enigo::{Direction, Enigo, Key as EKey, Keyboard, Settings};
 use regex::Regex;
 
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
@@ -37,27 +36,28 @@ const TARGET_SR: u32 = 16_000;
 // (most run 2–3 min), short enough that "left it recording at lunch" can't
 // eat unbounded RAM. ponytail: tune by editing the constant — no settings UI.
 const MAX_RECORD_SECS: u64 = 180;
-// How long to keep the last transcript in RAM for Right-Option re-paste.
-// After this, last_text is dropped so PHI doesn't sit around in memory.
-const LAST_TEXT_TTL_SECS: u64 = 120;
 // How long a transcript survives in the on-disk history file before it's
 // purged. The history exists so a long dictation can't be lost to a clipboard
-// overwrite or the RAM TTL above; the window is short so PHI doesn't linger.
+// overwrite; the window is short so PHI doesn't linger.
 const TRANSCRIPT_TTL_SECS: u64 = 2 * 3600;
-// Prune the history no more than once a minute while idle — the cap and
-// last_text TTL already tick every second, so we piggyback on that loop.
+// Prune the history no more than once a minute while idle — the record cap
+// already ticks every second, so we piggyback on that loop.
 const HISTORY_PRUNE_EVERY_SECS: u64 = 60;
 
-// macOS virtual keycodes (kVK_*).
-const KC_TILDE: i64 = 50;          // kVK_ANSI_Grave
+// macOS virtual keycodes (kVK_*). Right Option is the one and only hotkey: a
+// single quick tap toggles dictation. It's a non-printing modifier, so even if
+// macOS ignores our event tap nothing can ever be typed into the focused app.
+// It's deliberately NOT Control/Command/Fn — those are reserved by the system's
+// own Dictation "press-twice" shortcut.
 const KC_RIGHT_OPTION: i64 = 61;   // kVK_RightOption
-// NX_DEVICERALTKEYMASK — set in CGEventFlags when right Option is currently held.
-const FLAG_RIGHT_OPTION_BIT: u64 = 0x00000040;
+const FLAG_RIGHT_OPTION_BIT: u64 = 0x00000040; // NX_DEVICERALTKEYMASK
+// A tap = press and release within this window with no other key in between.
+// Holding ⌥ longer (e.g. to type ø, ¬) is not a tap and won't toggle.
+const TAP_MAX_MS: u128 = 500;
 
 #[derive(Debug, Clone)]
 enum Cmd {
     ToggleRecord,
-    RepasteLast,
     SetMic(String),
 }
 
@@ -76,7 +76,7 @@ fn main() -> Result<()> {
     eprintln!("Speech recognition is not perfect. You are responsible for proofreading");
     eprintln!("every transcript before clinical, billing, or legal use. See DISCLAIMER.md.");
     eprintln!();
-    eprintln!("Hotkeys: ` (tilde) = start/stop dictation. Right Option = re-paste last.");
+    eprintln!("Hotkey: single tap Right Option (⌥) = start/stop dictation. Re-paste anywhere with Cmd+V.");
     eprintln!("Quit from the menu-bar icon (audio-bars glyph in the top-right).");
     eprintln!();
 
@@ -168,8 +168,6 @@ fn pipeline_main(
         Arc::new(Mutex::new(Vec::with_capacity(48_000 * 30)));
     let mut active_stream: Option<cpal::Stream> = None;
     let mut recording_started: Option<Instant> = None;
-    let last_text: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let mut last_text_at: Option<Instant> = None;
     let mut last_history_prune = Instant::now();
 
     eprintln!("Ready.");
@@ -183,13 +181,6 @@ fn pipeline_main(
                 if last_history_prune.elapsed() >= Duration::from_secs(HISTORY_PRUNE_EVERY_SECS) {
                     prune_transcript_history();
                     last_history_prune = Instant::now();
-                }
-                if let Some(at) = last_text_at {
-                    if at.elapsed() >= Duration::from_secs(LAST_TEXT_TTL_SECS) {
-                        *last_text.lock().unwrap() = None;
-                        last_text_at = None;
-                        eprintln!("[TTL]   dropped last transcript from RAM.");
-                    }
                 }
                 if let Some(started) = recording_started {
                     if started.elapsed() >= Duration::from_secs(MAX_RECORD_SECS) {
@@ -217,26 +208,6 @@ fn pipeline_main(
                     None => eprintln!("[MIC]   '{name}' not found; keeping current mic."),
                 }
             }
-            Cmd::RepasteLast => {
-                let stored = last_text.lock().unwrap().clone();
-                match stored {
-                    Some(t) => {
-                        if let Ok(mut cb) = Clipboard::new() {
-                            let _ = cb.set_text(t);
-                        }
-                        last_text_at = Some(Instant::now()); // reset TTL on active use
-                        if env_flag("ATLAS_NO_AUTO_PASTE") {
-                            eprintln!("[PASTE] (re-loaded to clipboard. Cmd+V to paste.)");
-                        } else {
-                            match paste_cmd_v() {
-                                Ok(_) => eprintln!("[PASTE] (re-paste at cursor)"),
-                                Err(e) => eprintln!("[PASTE] failed: {e}"),
-                            }
-                        }
-                    }
-                    None => eprintln!("[PASTE] (nothing dictated yet — press ` first)"),
-                }
-            }
             Cmd::ToggleRecord => {
                 if active_stream.is_none() {
                     buffer.lock().unwrap().clear();
@@ -261,19 +232,9 @@ fn pipeline_main(
                             recording_started = Some(Instant::now());
                             play_start_sound();
                             let _ = tx_state.send(TrayState::Recording);
-                            // Tilde-leak cleanup. Off by default — the CGEventTap
-                            // should swallow the keypress on a clean Mac. Set
-                            // ATLAS_BACKSPACE_GUARD=1 if a third-party HID tap
-                            // (Wacom/OBS/MOTIV) is re-emitting the `\`` despite
-                            // our None-return. See feedback-atlas-dictation-tcc
-                            // rule 5. ponytail: env flag now, tray CheckMenuItem
-                            // when settings UI lands.
-                            if env_flag("ATLAS_BACKSPACE_GUARD") {
-                                send_backspace();
-                            }
                             eprintln!(
                                 "[REC]   speak now via {mic_name} ({} Hz, {} ch). \
-                                 ` again, or auto-stop in {}s.",
+                                 Tap Right ⌥ again, or auto-stop in {}s.",
                                 input_sr, channels, MAX_RECORD_SECS
                             );
                         }
@@ -314,11 +275,13 @@ fn pipeline_main(
                     params.set_initial_prompt(&initial_prompt);
                     state.full(params, &samples).context("whisper full() failed")?;
 
-                    let n_seg = state.full_n_segments().context("seg count failed")?;
+                    let n_seg = state.full_n_segments();
                     let mut text = String::new();
                     for i in 0..n_seg {
-                        if let Ok(s) = state.full_get_segment_text(i) {
-                            text.push_str(&s);
+                        if let Some(seg) = state.get_segment(i) {
+                            if let Ok(s) = seg.to_str_lossy() {
+                                text.push_str(&s);
+                            }
                         }
                     }
 
@@ -335,8 +298,6 @@ fn pipeline_main(
                         cleaned.split_whitespace().count()
                     );
 
-                    *last_text.lock().unwrap() = Some(cleaned.clone());
-                    last_text_at = Some(Instant::now());
                     save_transcript(&cleaned);
                     if let Ok(mut cb) = Clipboard::new() {
                         let _ = cb.set_text(cleaned.clone());
@@ -345,13 +306,10 @@ fn pipeline_main(
                     if env_flag("ATLAS_NO_AUTO_PASTE") {
                         // Clipboard-only mode: bulletproof against Terminal /
                         // iTerm / Electron focus races. User Cmd+V's themselves.
-                        eprintln!("        (on clipboard. Cmd+V to paste, Right Option re-pastes.)");
+                        eprintln!("        (on clipboard. Cmd+V to paste, or paste again anywhere.)");
                     } else {
-                        if env_flag("ATLAS_BACKSPACE_GUARD") {
-                            send_backspace();
-                        }
                         match paste_cmd_v() {
-                            Ok(_) => eprintln!("        (typed at cursor. Right Option re-pastes.)"),
+                            Ok(_) => eprintln!("        (typed at cursor. Cmd+V re-pastes elsewhere.)"),
                             Err(e) => eprintln!("        auto-paste failed: {e}. Cmd+V manually."),
                         }
                     }
@@ -578,12 +536,12 @@ fn build_stream(
     Ok(stream)
 }
 
-// ─── Hotkey listener: Core Graphics event tap (active mode) ──────────────────
+// ─── Hotkey listener: Core Graphics event tap ────────────────────────────────
 //
-// Replaces rdev::listen. Differences that matter:
-//   - The tap is in *active* mode (CGEventTapOptions::Default), so returning
-//     `None` from the callback SWALLOWS the keypress. The tilde never reaches
-//     the focused app; no stray `\`` characters get typed.
+//   - We watch Right Option (a modifier) and ALWAYS pass it through — we never
+//     swallow it. Because it's non-printing, a passed-through tap can't leave a
+//     stray character even if macOS ignores our return value. This is the whole
+//     reason the hotkey is a modifier and not a printable key like the tilde.
 //   - The tap runs on its own thread driving a CFRunLoop. macOS delivers
 //     events from the kernel into that run loop.
 
@@ -597,6 +555,11 @@ fn spawn_event_tap(tx: Sender<Cmd>) {
 
         // Single-threaded state used only inside the tap callback.
         let right_option_held = std::cell::Cell::new(false);
+        // When Right Option went down, and whether the press is still a clean
+        // tap candidate (any other key pressed in between cancels it, so ⌥-combos
+        // like ⌥o don't toggle).
+        let ropt_pressed_at: std::cell::Cell<Option<Instant>> = std::cell::Cell::new(None);
+        let ropt_tap_candidate = std::cell::Cell::new(false);
 
         let tap_result = CGEventTap::new(
             CGEventTapLocation::HID,
@@ -606,25 +569,34 @@ fn spawn_event_tap(tx: Sender<Cmd>) {
             move |_proxy, ev_type, event| {
                 let kc = event.get_integer_value_field(9 /* kCGKeyboardEventKeycode */);
                 match ev_type {
-                    CGEventType::KeyDown if kc == KC_TILDE => {
-                        let autorepeat = event.get_integer_value_field(
-                            8, /* kCGKeyboardEventAutorepeat */
-                        );
-                        if autorepeat == 0 {
-                            let _ = tx.send(Cmd::ToggleRecord);
-                        }
-                        None // swallow — no `\`` ever lands in the focused app
-                    }
-                    CGEventType::KeyUp if kc == KC_TILDE => None, // belt+suspenders: swallow KeyUp too
+                    // Record toggle = a single quick tap of Right Option. It's a
+                    // modifier (prints nothing) and we pass it through untouched,
+                    // so even if macOS ignores our event tap no stray character
+                    // can ever land in the focused app — the stray-mark bug class
+                    // is gone by construction.
                     CGEventType::FlagsChanged if kc == KC_RIGHT_OPTION => {
-                        let bits = event.get_flags().bits();
-                        let now_held = (bits & FLAG_RIGHT_OPTION_BIT) != 0;
+                        let now_held = (event.get_flags().bits() & FLAG_RIGHT_OPTION_BIT) != 0;
                         let was_held = right_option_held.get();
                         if now_held && !was_held {
-                            let _ = tx.send(Cmd::RepasteLast);
+                            ropt_pressed_at.set(Some(Instant::now()));
+                            ropt_tap_candidate.set(true);
+                        } else if !now_held && was_held {
+                            let quick = ropt_pressed_at
+                                .get()
+                                .map(|t| t.elapsed().as_millis() <= TAP_MAX_MS)
+                                .unwrap_or(false);
+                            if ropt_tap_candidate.get() && quick {
+                                let _ = tx.send(Cmd::ToggleRecord);
+                            }
+                            ropt_tap_candidate.set(false);
                         }
                         right_option_held.set(now_held);
-                        // Pass modifier through — don't break other apps that use Right Option.
+                        Some(event.clone()) // never swallow — ⌥ must keep working
+                    }
+                    // Any other key pressed while ⌥ is down → it's a combo, not a
+                    // solo tap. Cancel the candidate so ⌥o, ⌥-arrows, etc. don't toggle.
+                    CGEventType::KeyDown => {
+                        ropt_tap_candidate.set(false);
                         Some(event.clone())
                     }
                     _ => Some(event.clone()),
@@ -701,12 +673,14 @@ fn resolve(bundle_name: &str, dev_path: &str) -> PathBuf {
 }
 
 /// Pick fastest *working* backend.
-/// whisper-rs 0.13 Metal JIT-compile crashes on Apple Silicon (shader error at
-/// program_source:6735 → ggml_backend_metal_init fails → silent fallback to
-/// BLAS anyway). So just go straight to BLAS — no wasted Metal allocation,
-/// honest label. ponytail: revisit when bumping whisper-rs past 0.13.
+/// Use the Apple GPU (Metal). whisper.cpp loads the Metal backend when it's
+/// available and transparently falls back to BLAS/CPU if Metal init fails, so
+/// `use_gpu(true)` is safe on every Mac. The 0.13 Metal shader-compile bug that
+/// forced CPU-only earlier is gone in whisper-rs 0.13.2 — verified by a clean
+/// Metal load (no JIT error, `use gpu = 1`) on the M1 Ultra 2026-06-20.
+/// ponytail: when the Linux/Windows port lands, branch here for CUDA/Vulkan/CPU.
 fn pick_backend() -> (bool, String) {
-    (false, format!("CPU/BLAS, {}", cpu_brand()))
+    (true, format!("Metal GPU, {}", cpu_brand()))
 }
 
 fn cpu_brand() -> String {
@@ -779,16 +753,6 @@ fn env_flag(name: &str) -> bool {
         }
         Err(_) => false,
     }
-}
-
-/// Send one Backspace via enigo. Used to clean up a leaked ` character when
-/// the CGEventTap's None-return doesn't actually suppress (third-party event
-/// taps from Wacom / OBS / etc. can re-emit at HID and we can't see what they
-/// inserted into the chain). ponytail: cheaper than chasing the right tap
-/// ordering. Costs at most one keystroke per dictation cycle.
-fn send_backspace() {
-    let Ok(mut enigo) = Enigo::new(&Settings::default()) else { return };
-    let _ = enigo.key(EKey::Backspace, Direction::Click);
 }
 
 // ─── Transcript history (local, auto-expiring) ───────────────────────────────
@@ -901,6 +865,56 @@ mod tests {
         assert_eq!(kept.len(), 1, "the 3h-old record must be pruned");
         assert_eq!(kept[0].1.trim(), "recent note");
     }
+
+    #[test]
+    fn scrub_strips_wrapper_quotes_keeps_contractions() {
+        assert_eq!(scrub("|patient is stable|"), "patient is stable");
+        assert_eq!(scrub("'the patient'"), "the patient");
+        assert_eq!(scrub("\u{201C}no acute distress\u{201D}"), "no acute distress");
+        // interior apostrophe must survive
+        assert_eq!(scrub("patient's vitals are fine"), "patient's vitals are fine");
+    }
+
+    #[test]
+    fn collapse_repeats_kills_whisper_phrase_loops() {
+        // short loop: "question mark" spoken once, transcribed three times
+        assert_eq!(collapse_repeats("question mark question mark question mark"), "question mark");
+        // a whole sentence duplicated
+        assert_eq!(collapse_repeats("can i help you can i help you"), "can i help you");
+        // the real silence-loop bug: an 11-word sentence repeated many times
+        // (whisper filling left-on-recording silence). Must collapse to ONE.
+        let unit = "so please can we get that on the list as well";
+        let looped = std::iter::repeat(unit).take(10).collect::<Vec<_>>().join(" ");
+        assert_eq!(collapse_repeats(&looped), unit);
+        // odd count (5×) must also collapse to one, not to N/2
+        let five = std::iter::repeat(unit).take(5).collect::<Vec<_>>().join(" ");
+        assert_eq!(collapse_repeats(&five), unit);
+        // non-repeating text is untouched
+        assert_eq!(collapse_repeats("the patient is stable today"), "the patient is stable today");
+        assert_eq!(collapse_repeats("blood pressure is 120 over 80"), "blood pressure is 120 over 80");
+    }
+
+    #[test]
+    fn voice_punctuation_is_clinically_safe() {
+        // always-safe commands map anywhere
+        assert_eq!(scrub("are you sure question mark"), "are you sure?");
+        assert_eq!(scrub("first point new paragraph second point"), "first point\n\nsecond point");
+        // "period" ends a sentence — works mid-note, not just at the very end
+        assert_eq!(scrub("the patient is stable period"), "the patient is stable.");
+        assert_eq!(
+            scrub("the skin was macerated period now we called surgery"),
+            "the skin was macerated. now we called surgery"
+        );
+        // ...but a clinical "period" noun survives untouched
+        assert_eq!(scrub("the postoperative period was uneventful"), "the postoperative period was uneventful");
+        assert_eq!(scrub("we observed her for a long period and discharged"), "we observed her for a long period and discharged");
+        // "new line" ends a line, but a catheter "new line" is left alone
+        assert_eq!(scrub("first item new line second item"), "first item\nsecond item");
+        assert_eq!(scrub("we placed a new line in the arm"), "we placed a new line in the arm");
+        // words we deliberately never map (ICU/GI collisions)
+        assert_eq!(scrub("the ascending colon was normal"), "the ascending colon was normal");
+        assert_eq!(scrub("the patient remained in a coma"), "the patient remained in a coma");
+    }
 }
 
 fn resample_linear(input: &[f32], in_rate: u32, out_rate: u32) -> Vec<f32> {
@@ -930,9 +944,103 @@ fn scrub(text: &str) -> String {
     let spaces = Regex::new(r"\s+").unwrap();
     s = spaces.replace_all(&s, " ").to_string();
     s = dedup_adjacent_words(&s);
+    s = collapse_repeats(&s);
+    s = apply_voice_punctuation(&s);
     let pun = Regex::new(r"\s+([,.!?;:])").unwrap();
     s = pun.replace_all(&s, "$1").to_string();
-    s.trim().to_string()
+    // Tidy spaces around any newline the punctuation commands inserted, keeping
+    // a double newline (paragraph) as two.
+    let nl = Regex::new(r"[ \t]*\n[ \t]*").unwrap();
+    s = nl.replace_all(&s, "\n").to_string();
+    // whisper large-v3-turbo likes to wrap an utterance in stray quotes/pipes at
+    // the very start and end (recurring "|...|" / "'...'" bug). Strip wrapper
+    // junk off both ends only — interior apostrophes (contractions) are safe.
+    s.trim_matches(|c: char| c.is_whitespace() || "|'\"`\u{2018}\u{2019}\u{201C}\u{201D}".contains(c))
+        .to_string()
+}
+
+/// Spoken-punctuation commands, tuned for multi-sentence CLINICAL dictation.
+/// Always-safe (rarely a medical word): "question mark", "new paragraph",
+/// "exclamation point/mark", "full stop".
+/// Context-sensitive, because the word is also clinical vocabulary:
+///  - "period" → "." UNLESS it reads as a noun ("postoperative period", "a
+///    recovery period", "the period of observation"). Converts mid-note so each
+///    sentence can end with "period".
+///  - "new line"/"next line" → newline UNLESS it reads as a catheter ("a new
+///    line", "central line").
+/// NOT mapped at all: "comma" (whisper writes it as "coma" — collides with
+/// Glasgow Coma Scale / comatose) and "colon" (ascending/sigmoid colon). Whisper
+/// already auto-inserts most commas from prosody, so this is a small loss.
+/// ponytail: word-scan with a small denylist, not a parser — a rare clinical
+/// "period"/"line" phrasing outside the list may still convert; widen the list
+/// if one bites.
+fn apply_voice_punctuation(s: &str) -> String {
+    let words: Vec<&str> = s.split_whitespace().collect();
+    let norm: Vec<String> = words
+        .iter()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_ascii_lowercase())
+        .collect();
+    let n = words.len();
+
+    // "period" is the noun, not the command, in these contexts → keep as a word.
+    const PERIOD_NOUN_PREV: &[&str] = &[
+        "postoperative", "post-operative", "perioperative", "intraoperative", "recovery",
+        "grace", "incubation", "refractory", "latency", "latent", "menstrual", "gestational",
+        "observation", "prodromal", "neonatal", "newborn", "quiet", "rest", "time", "window",
+        "long", "short", "brief", "extended", "prolonged", "given", "same",
+    ];
+    const PERIOD_NOUN_NEXT: &[&str] = &[
+        "of", "was", "is", "were", "are", "where", "during", "lasted", "lasts", "ended",
+        "began", "begins", "had", "has", "without", "with",
+    ];
+    let determiner = |w: &str| {
+        matches!(w, "a" | "an" | "the" | "this" | "that" | "his" | "her" | "its" | "each" | "another" | "one" | "any" | "no")
+    };
+    // "line" is a catheter, not a newline command, in these contexts.
+    let line_is_catheter = |w: &str| {
+        determiner(w)
+            || matches!(w, "central" | "arterial" | "peripheral" | "picc" | "iv" | "venous"
+                | "midline" | "femoral" | "subclavian" | "jugular" | "second" | "third")
+    };
+
+    let mut out: Vec<String> = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        let w = norm[i].as_str();
+        let next = norm.get(i + 1).map(|s| s.as_str()).unwrap_or("");
+        let prev = if i >= 1 { norm[i - 1].as_str() } else { "" };
+        let prev2 = if i >= 2 { norm[i - 2].as_str() } else { "" };
+
+        // two-word, always-safe
+        if w == "question" && next == "mark" { out.push("?".into()); i += 2; continue; }
+        if w == "new" && next == "paragraph" { out.push("\n\n".into()); i += 2; continue; }
+        if w == "exclamation" && (next == "mark" || next == "point") { out.push("!".into()); i += 2; continue; }
+        if w == "full" && next == "stop" { out.push(".".into()); i += 2; continue; }
+
+        // "new line" / "next line" → newline unless it's a catheter
+        if (w == "new" || w == "next") && next == "line" && !line_is_catheter(prev) {
+            out.push("\n".into());
+            i += 2;
+            continue;
+        }
+
+        // "period" → "." unless it reads as the noun
+        if w == "period" {
+            let is_noun = PERIOD_NOUN_PREV.contains(&prev)
+                || determiner(prev)
+                || determiner(prev2)
+                || PERIOD_NOUN_NEXT.contains(&next);
+            if !is_noun {
+                out.push(".".into());
+                i += 1;
+                continue;
+            }
+        }
+
+        out.push(words[i].to_string());
+        i += 1;
+    }
+    out.join(" ")
 }
 
 fn dedup_adjacent_words(s: &str) -> String {
@@ -947,4 +1055,55 @@ fn dedup_adjacent_words(s: &str) -> String {
         out.push(w);
     }
     out.join(" ")
+}
+
+/// Collapse an immediately-repeated phrase (length 2+) down to one copy.
+/// Whisper — especially on a short clip with a long biasing prompt — sometimes
+/// emits the same phrase 2–3× in a row ("question mark question mark question
+/// mark") or a whole sentence twice. We find the longest block at position i
+/// that's immediately followed by one or more exact copies of itself and drop
+/// the copies. Comparison is case-insensitive and ignores edge punctuation.
+/// Single-word runs are left to dedup_adjacent_words. ponytail: O(n²·k) but
+/// transcripts are a few hundred words; upgrade to a suffix structure only if a
+/// giant paste ever drags. Ceiling: a deliberate exact phrase repeat ("bye bye
+/// bye") collapses too — rare in clinical dictation, acceptable.
+fn collapse_repeats(s: &str) -> String {
+    let words: Vec<&str> = s.split_whitespace().collect();
+    let norm: Vec<String> = words
+        .iter()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_ascii_lowercase())
+        .collect();
+    let n = words.len();
+    let mut keep = vec![true; n];
+    let mut i = 0;
+    while i < n {
+        // Cap at 40-word units — covers any sentence whisper might loop on while
+        // bounding the no-repeat scan cost. SMALLEST k first: the fundamental
+        // period collapses N copies down to one (largest-first would only halve
+        // them, leaving N/2 for odd counts).
+        let max_k = ((n - i) / 2).min(40);
+        let mut collapsed = false;
+        for k in 2..=max_k {
+            if norm[i..i + k] == norm[i + k..i + 2 * k] {
+                // Drop every immediately-following identical k-block.
+                let mut j = i + k;
+                while j + k <= n && norm[i..i + k] == norm[j..j + k] {
+                    keep[j..j + k].iter_mut().for_each(|b| *b = false);
+                    j += k;
+                }
+                i = j;
+                collapsed = true;
+                break;
+            }
+        }
+        if !collapsed {
+            i += 1;
+        }
+    }
+    words
+        .iter()
+        .zip(keep)
+        .filter_map(|(w, k)| k.then_some(*w))
+        .collect::<Vec<_>>()
+        .join(" ")
 }

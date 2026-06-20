@@ -22,7 +22,7 @@ Cloud dictation services send your patient audio to a third party. They want a B
 
 ## Status
 
-**v0.2.0 — macOS (Apple Silicon) only.** Real `.app` bundle with a menubar icon and a Quit menu. The current build hard-depends on macOS-specific bits (`afplay`, `/System/Library/Sounds/`, Accessibility permission model, Cmd-V paste, Core Graphics event tap). Linux + Windows ports are on the v0.3 roadmap.
+**v0.4.0 — macOS (Apple Silicon) only.** Real `.app` bundle with a menubar icon and a Quit menu, GPU-accelerated (Metal) transcription, single-tap Right Option hotkey, and clinically-tuned spoken punctuation. The current build hard-depends on macOS-specific bits (`afplay`, `/System/Library/Sounds/`, Accessibility permission model, Cmd-V paste, Core Graphics event tap, Metal). Linux + Windows ports are on the roadmap.
 
 ## Install
 
@@ -52,12 +52,32 @@ open dist/AtlasDictation.app
 
 1. Launch Atlas Dictation. After ~5 seconds the audio-bars icon appears in the top-right menu bar.
 2. **Click into the app where you want the text** (TextEdit, browser, EHR, anything with a text field).
-3. Press **`** (tilde / backtick key, top-left of keyboard). Pop sound = recording.
+3. **Tap the Right Option (⌥) key once** (the ⌥ to the right of the space bar). Pop sound = recording.
 4. Speak.
-5. Press **`** again. Glass sound = transcribing. Cleaned text auto-pastes at your cursor.
-6. **Right Option** re-pastes the last transcript anywhere — drop a med list into the chart, the pharmacy order, and the patient handout without re-dictating.
+5. **Tap Right ⌥ once more.** Glass sound = transcribing. Cleaned text auto-pastes at your cursor.
+6. To drop the same text somewhere else (a med list into the chart, the pharmacy order, and the patient handout), click there and press **Cmd+V** — the transcript stays on your clipboard until you dictate again.
 7. Quit via the menu-bar icon → "Quit Atlas Dictation".
-6. To drop the same text somewhere else (e.g. a medication list into the chart, the pharmacy order, and the patient handout), click there and press **Right Option** — re-pastes from the in-app buffer. Cmd+V works too, as long as nothing else has overwritten the clipboard.
+
+> The hotkey is Right Option — a non-printing key — on purpose: it can never leave a stray character in your text, even if a permission is misconfigured. It's also clear of macOS's own Dictation shortcut (Control/Fn/Command pressed twice).
+
+## Punctuation
+
+**You usually don't need to say it.** Whisper adds commas, periods, and most punctuation automatically from the rhythm and pauses of your speech — just talk normally. In particular, **you do not need to say "comma"**; pause naturally and the comma appears. (Saying "comma" out loud is also unreliable — speech recognition tends to hear it as the word *coma*, which matters in clinical notes, so it is intentionally **not** treated as a command.)
+
+When you *do* want to force a mark, these spoken commands work:
+
+| Say… | You get | Notes |
+|------|---------|-------|
+| "period" / "full stop" | `.` | Ends a sentence anywhere in the dictation. Skipped when it reads as a word — e.g. "postoperative **period**", "a recovery **period**" stay as text. |
+| "question mark" | `?` | Always. |
+| "exclamation point" / "exclamation mark" | `!` | Always. |
+| "new line" / "next line" | line break | Skipped when it reads as a catheter — e.g. "a **new line**", "central **line**" stay as text. |
+| "new paragraph" | blank line + new paragraph | Always. |
+
+Notes for clinical use:
+- **"comma" and "colon" are deliberately not commands** — they collide with *coma/comatose* and *ascending/sigmoid colon*. Speak naturally for commas; type a colon if you need one.
+- The collision-aware rules ("period"/"new line") use a built-in list of medical phrasings. If a phrase you use slips through (a "period" that shouldn't have become a `.`), it's a one-line fix in `apply_voice_punctuation` in `src/main.rs`.
+- After a spoken "period", the next word is left as-is (not auto-capitalized), to avoid mangling things like "5 mg. of".
 
 ## Disclaimer (please read once)
 

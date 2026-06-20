@@ -1,32 +1,40 @@
-# Atlas Intensive Care Dictation v0.2.0
+# Atlas Intensive Care Dictation v0.4.0
 
-**The first public release.** Local medical dictation that never sends a byte to the cloud.
+Local medical dictation that never sends a byte to the cloud.
 
 ## What it is
 
-Press tilde (`` ` ``) anywhere on your Mac → speak → press tilde again → cleaned medical text auto-pastes at your cursor. The whole pipeline — audio capture, Whisper Turbo transcription, medical-vocabulary biasing — runs on your own machine. No network calls, no accounts, no transcript storage.
+Tap Right Option (⌥) once anywhere on your Mac → speak → tap Right ⌥ once more → cleaned medical text auto-pastes at your cursor. The whole pipeline — audio capture, Whisper Turbo transcription, medical-vocabulary biasing — runs on your own machine. No network calls, no accounts, no transcript storage.
 
 Built for clinicians who want efficient note-taking without handing patient audio to a third-party transcription service.
 
+## New in v0.4.0
+
+- **GPU acceleration (Apple Metal).** Transcription now runs on your Mac's GPU, with automatic fallback to CPU on machines where Metal isn't available. Noticeably faster on Apple Silicon.
+- **New hotkey: a single tap of Right Option (⌥).** Replaces the old tilde key. It's a non-printing key, so it can *never* leave a stray character in your text — and it's clear of macOS's own Dictation shortcut.
+- **Spoken punctuation, tuned for clinical notes.** Say "period", "question mark", "new line", "new paragraph", "exclamation point". Collision-aware: "postoperative **period**" and "central **line**" stay as words. "comma"/"colon" are intentionally *not* commands (they collide with *coma* and *colon*) — Whisper adds commas automatically anyway. See the README for the full table.
+- **Repetition / silence-loop cleanup.** If you leave it recording during silence, Whisper can loop the last sentence; that's now collapsed back to a single copy.
+- **Cleaner output.** Stray wrapping quotes/pipes that Whisper sometimes adds are stripped.
+- **Lost-dictation safety net.** A short rolling 2-hour local history (`~/Library/Logs/AtlasDictation/transcripts.txt`), auto-deleted so PHI doesn't linger.
+- **Microphone picker** in the menu-bar menu; your choice is remembered. Mic is pinned per session (no more mid-session drift to the wrong input).
+
 ## Highlights
 
-- **Hold tilde to record, press again to stop.** Cleaned text pastes at your cursor.
-- **Right Option** re-pastes the last transcript (drop a med list into chart + pharmacy order + handout).
+- **Tap Right ⌥ once to record, tap again to stop.**
+- **Cmd+V re-pastes the last transcript** anywhere (drop a med list into chart + pharmacy order + handout) — it stays on the clipboard until you dictate again.
 - **Audio cues:** Pop on record-start, Glass on stop.
 - **Mic indicator turns off when idle.** Mic stream opens only during dictation.
 - **Menu-bar utility.** Quit from the audio-bars icon in the top-right.
-- **Bundled Whisper Turbo model (1.5 GB).** No first-run download.
+- **Bundled Whisper Turbo model (~1.5 GB).** No first-run download.
 - **Bundled medical biasing prompt** — IM, ICU, surgery, OB/GYN, ID, neuro vocabulary baked into Whisper's initial prompt.
-- **Filler scrubber** — strips "uh", "um", "you know", repeated words.
-- **Transcripts kept locally for 2 hours only.** A short rolling history (`~/Library/Logs/AtlasDictation/transcripts.txt`) so a long dictation can't be lost to a clipboard overwrite; auto-deleted after 2h so PHI doesn't linger. Never leaves your Mac. (The diagnostic log still records length, not content.)
 
 ## Install
 
-1. Download `AtlasDictation-0.2.0.dmg` (1.4 GB) from this release.
+1. Download `AtlasDictation-0.4.0.dmg` from this release.
 2. Open the DMG, drag **AtlasDictation** onto the **Applications** alias, eject.
 3. Launch from /Applications (right-click → Open the first time to bypass Gatekeeper).
 4. macOS will prompt for **Microphone** — allow.
-5. The hotkey won't work until you grant **Accessibility**: System Settings → Privacy & Security → Accessibility → click **+** → add Atlas Dictation → toggle ON. Quit from the menu-bar icon, then re-launch.
+5. The hotkey needs **Accessibility** and **Input Monitoring**: System Settings → Privacy & Security → add Atlas Dictation under *both* Accessibility and Input Monitoring, toggle ON. Quit from the menu-bar icon, then re-launch.
 
 ## Build from source
 
