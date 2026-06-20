@@ -1,4 +1,4 @@
-# Atlas Intensive Care Dictation v0.4.0
+# Atlas Intensive Care Dictation v0.4.1
 
 Local medical dictation that never sends a byte to the cloud.
 
@@ -7,6 +7,11 @@ Local medical dictation that never sends a byte to the cloud.
 Tap Right Option (⌥) once anywhere on your Mac → speak → tap Right ⌥ once more → cleaned medical text auto-pastes at your cursor. The whole pipeline — audio capture, Whisper Turbo transcription, medical-vocabulary biasing — runs on your own machine. No network calls, no accounts, no transcript storage.
 
 Built for clinicians who want efficient note-taking without handing patient audio to a third-party transcription service.
+
+## New in v0.4.1
+
+- **Noise suppression (voice-activity detection).** A built-in noise gate (Silero VAD) means only your actual speech is transcribed — background noise and silence are skipped, so leaving the mic running no longer produces hallucinated gibberish.
+- **English-only, locked.** The model is hard-pinned to English (covers US, Indian, British and other accents) and any stray Chinese/Japanese/Korean characters from language drift are stripped from the output.
 
 ## New in v0.4.0
 
@@ -30,7 +35,7 @@ Built for clinicians who want efficient note-taking without handing patient audi
 
 ## Install
 
-1. Download `AtlasDictation-0.4.0.dmg` from this release.
+1. Download `AtlasDictation-0.4.1.dmg` from this release.
 2. Open the DMG, drag **AtlasDictation** onto the **Applications** alias, eject.
 3. Launch from /Applications (right-click → Open the first time to bypass Gatekeeper).
 4. macOS will prompt for **Microphone** — allow.
@@ -43,6 +48,9 @@ git clone https://github.com/whotGZ/atlas-dictation
 cd atlas-dictation
 curl -L -o models/ggml-large-v3-turbo.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
+# optional noise gate (~860 KB)
+curl -L -o models/ggml-silero-v5.1.2.bin \
+  https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
 ./build-app.sh
 open dist/AtlasDictation.app
 ```

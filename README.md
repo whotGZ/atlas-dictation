@@ -22,7 +22,7 @@ Cloud dictation services send your patient audio to a third party. They want a B
 
 ## Status
 
-**v0.4.0 — macOS (Apple Silicon) only.** Real `.app` bundle with a menubar icon and a Quit menu, GPU-accelerated (Metal) transcription, single-tap Right Option hotkey, and clinically-tuned spoken punctuation. The current build hard-depends on macOS-specific bits (`afplay`, `/System/Library/Sounds/`, Accessibility permission model, Cmd-V paste, Core Graphics event tap, Metal). Linux + Windows ports are on the roadmap.
+**v0.4.1 — macOS (Apple Silicon) only.** Real `.app` bundle with a menubar icon and a Quit menu, GPU-accelerated (Metal) transcription, single-tap Right Option hotkey, clinically-tuned spoken punctuation, English-only output, and a voice-activity noise gate. The current build hard-depends on macOS-specific bits (`afplay`, `/System/Library/Sounds/`, Accessibility permission model, Cmd-V paste, Core Graphics event tap, Metal). Linux + Windows ports are on the roadmap.
 
 ## Install
 
@@ -42,6 +42,9 @@ cd atlas-dictation
 # Fetch the Whisper Turbo model (~1.5 GB) into models/
 curl -L -o models/ggml-large-v3-turbo.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
+# optional noise gate (~860 KB)
+curl -L -o models/ggml-silero-v5.1.2.bin \
+  https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
 
 # Build the .app bundle
 ./build-app.sh

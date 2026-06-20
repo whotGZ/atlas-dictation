@@ -20,7 +20,7 @@ use cpal::SampleFormat;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperVadParams};
 
 use arboard::Clipboard;
 use regex::Regex;
@@ -31,6 +31,10 @@ use tray_icon::{Icon, TrayIconBuilder};
 
 const MODEL_NAME: &str = "ggml-large-v3-turbo.bin";
 const DICT_NAME: &str = "medical-dictionary.txt";
+// Silero VAD model. When present, Whisper only transcribes detected speech and
+// skips silence/background noise — kills the "garbage from ambient noise"
+// hallucinations. Small (~860 KB). Optional: if missing, we run without VAD.
+const VAD_MODEL_NAME: &str = "ggml-silero-v5.1.2.bin";
 const TARGET_SR: u32 = 16_000;
 // Hard cap on a single dictation. Long enough for a thoughtful HPI / SOAP
 // (most run 2–3 min), short enough that "left it recording at lunch" can't
@@ -82,6 +86,11 @@ fn main() -> Result<()> {
 
     let model_path = resolve(MODEL_NAME, "models/ggml-large-v3-turbo.bin");
     let dict_path = resolve(DICT_NAME, "assets/medical-dictionary.txt");
+    // Optional — VAD just makes us skip non-speech; run without it if absent.
+    let vad_path = {
+        let p = resolve(VAD_MODEL_NAME, "models/ggml-silero-v5.1.2.bin");
+        p.exists().then_some(p)
+    };
     if !model_path.exists() {
         anyhow::bail!(
             "Model file missing at {}.\n\
@@ -99,7 +108,7 @@ fn main() -> Result<()> {
 
     let tx_state_pipeline = tx_state.clone();
     thread::spawn(move || {
-        if let Err(e) = pipeline_main(rx_cmd, tx_state_pipeline, model_path, dict_path) {
+        if let Err(e) = pipeline_main(rx_cmd, tx_state_pipeline, model_path, dict_path, vad_path) {
             eprintln!("PIPELINE FATAL: {e:#}");
         }
     });
@@ -115,6 +124,7 @@ fn pipeline_main(
     tx_state: Sender<TrayState>,
     model_path: PathBuf,
     dict_path: PathBuf,
+    vad_path: Option<PathBuf>,
 ) -> Result<()> {
     let (use_gpu, backend_label) = pick_backend();
     eprintln!("Loading Whisper Turbo model ({backend_label})...");
@@ -123,6 +133,14 @@ fn pipeline_main(
     let ctx = WhisperContext::new_with_params(model_path.to_str().unwrap(), cparams)
         .context("failed to load whisper model")?;
     eprintln!("  Model ready.");
+
+    // VAD model path as a string, ready to hand to each transcription's params.
+    let vad_model_str: Option<String> =
+        vad_path.and_then(|p| p.to_str().map(String::from));
+    match &vad_model_str {
+        Some(_) => eprintln!("  Noise gate: VAD on (skips silence + background noise)."),
+        None => eprintln!("  Noise gate: VAD off (model not bundled)."),
+    }
 
     let dict_raw = std::fs::read_to_string(&dict_path).unwrap_or_default();
     let mut initial_prompt: String = dict_raw
@@ -268,11 +286,26 @@ fn pipeline_main(
                     );
                     params.set_translate(false);
                     params.set_language(Some("en"));
+                    // Hard-pin English. Whisper has ONE "en" (it covers US, Indian,
+                    // British… accents — there is no per-region model), so this is
+                    // the right setting for US + India English. Disabling auto-detect
+                    // stops it drifting to Chinese/Japanese on noise or accent.
+                    params.set_detect_language(false);
                     params.set_print_special(false);
                     params.set_print_progress(false);
                     params.set_print_realtime(false);
                     params.set_print_timestamps(false);
                     params.set_initial_prompt(&initial_prompt);
+                    // Noise gate: when the VAD model is present, Whisper runs it
+                    // first and only transcribes detected speech — silence and
+                    // background noise never reach the decoder, so they can't be
+                    // hallucinated into words. Defaults (Silero) are tuned well for
+                    // dictation; we don't override them.
+                    if let Some(ref vp) = vad_model_str {
+                        params.set_vad_model_path(Some(vp));
+                        params.set_vad_params(WhisperVadParams::new());
+                        params.enable_vad(true);
+                    }
                     state.full(params, &samples).context("whisper full() failed")?;
 
                     let n_seg = state.full_n_segments();
@@ -915,6 +948,17 @@ mod tests {
         assert_eq!(scrub("the ascending colon was normal"), "the ascending colon was normal");
         assert_eq!(scrub("the patient remained in a coma"), "the patient remained in a coma");
     }
+
+    #[test]
+    fn cjk_language_drift_is_stripped() {
+        // CJK tokens mixed into English are removed; the sentence survives
+        assert_eq!(scrub("the patient 你好 is stable"), "the patient is stable");
+        assert_eq!(scrub("blood pressure \u{3068} is normal"), "blood pressure is normal");
+        // an all-CJK hallucination collapses to nothing (→ "no speech")
+        assert_eq!(scrub("\u{60a3}\u{8005}\u{306f}\u{5b89}\u{5b9a}"), "");
+        // legitimate accented/Greek/punctuation English is untouched
+        assert_eq!(scrub("café au lait spots and a 5 \u{00b5}g dose"), "café au lait spots and a 5 µg dose");
+    }
 }
 
 fn resample_linear(input: &[f32], in_rate: u32, out_rate: u32) -> Vec<f32> {
@@ -935,8 +979,21 @@ fn resample_linear(input: &[f32], in_rate: u32, out_rate: u32) -> Vec<f32> {
     out
 }
 
+/// True for Chinese/Japanese/Korean characters (and their fullwidth/CJK
+/// punctuation). This is an English-only clinical tool, so any of these in the
+/// output is a Whisper language-drift hallucination — strip them. Deliberately
+/// narrow: leaves Greek (α/β/µ), accented Latin (café), and normal punctuation
+/// (— " ') untouched so real English text is never harmed.
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3000..=0x303F | 0x3040..=0x309F | 0x30A0..=0x30FF | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xAC00..=0xD7AF | 0x1100..=0x11FF
+        | 0xFF00..=0xFFEF)
+}
+
 fn scrub(text: &str) -> String {
-    let mut s = text.trim().to_string();
+    // Strip CJK hallucinations first; the space-collapse below closes any gaps.
+    let mut s: String = text.trim().chars().filter(|&c| !is_cjk(c)).collect();
     let fillers = Regex::new(
         r"(?i)\b(uh+|um+|er+|erm+|ah+|hmm+|mm+m*|like|you know|i mean|kind of|sort of)\b[,.]?\s*"
     ).unwrap();
