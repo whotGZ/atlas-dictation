@@ -1,6 +1,13 @@
-# Atlas Intensive Care Dictation v0.4.1
+# Atlas Intensive Care Dictation v0.4.2
 
 Local medical dictation that never sends a byte to the cloud.
+
+## New in v0.4.2 (fixes)
+
+- **Fixed: dictation could come out empty / "Thank you."** The v0.4.1 voice-activity noise gate was clipping real speech to silence on some microphones. The noise gate is **removed** for now — dictation is reliable again. (English-only, repetition cleanup, and the record cap still protect against garbage.)
+- **Fixed: crash when quitting.** The app no longer crashes during the GPU's shutdown cleanup when you choose Quit.
+
+**If you have v0.4.1, please update to v0.4.2.**
 
 ## What it is
 
@@ -35,7 +42,7 @@ Built for clinicians who want efficient note-taking without handing patient audi
 
 ## Install
 
-1. Download `AtlasDictation-0.4.1.dmg` from this release.
+1. Download `AtlasDictation-0.4.2.dmg` from this release.
 2. Open the DMG, drag **AtlasDictation** onto the **Applications** alias, eject.
 3. Launch from /Applications (right-click → Open the first time to bypass Gatekeeper).
 4. macOS will prompt for **Microphone** — allow.

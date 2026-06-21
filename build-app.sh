@@ -18,9 +18,9 @@ cp packaging/Info.plist             "$APP/Contents/Info.plist"
 cp packaging/AppIcon.icns           "$APP/Contents/Resources/AppIcon.icns"
 cp models/ggml-large-v3-turbo.bin   "$APP/Contents/Resources/ggml-large-v3-turbo.bin"
 cp assets/medical-dictionary.txt    "$APP/Contents/Resources/medical-dictionary.txt"
-# Silero VAD model (optional noise gate). Skip quietly if absent.
-[ -f models/ggml-silero-v5.1.2.bin ] && \
-    cp models/ggml-silero-v5.1.2.bin "$APP/Contents/Resources/ggml-silero-v5.1.2.bin"
+# VAD model intentionally NOT bundled (v0.4.2): the Silero gate was clipping real
+# speech to silence on some mics. Code still supports it (model-gated) — re-add
+# this cp line once the threshold is tuned and re-tested. See DEVLOG v0.4.2.
 
 # Sign with a stable identity so the TCC Accessibility grant survives rebuilds.
 # Prefers the self-signed local cert; falls back to ad-hoc if absent.

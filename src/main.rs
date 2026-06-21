@@ -402,7 +402,12 @@ fn run_event_loop_with_tray(rx_state: Receiver<TrayState>, tx_cmd: Sender<Cmd>) 
         if let Ok(menu_event) = MenuEvent::receiver().try_recv() {
             if menu_event.id == quit_id {
                 eprintln!("Quit selected.");
-                *control_flow = ControlFlow::ExitWithCode(0);
+                // Exit immediately via _exit, skipping C++/atexit teardown.
+                // whisper.cpp's Metal backend (ggml_metal_device_free →
+                // ggml_metal_rsets_free) aborts if its residency-set init is
+                // still racing at process exit — a crash on every quit. We don't
+                // need any cleanup (OS reclaims it), so bypass the teardown.
+                unsafe { libc::_exit(0) };
             } else if let Some((_, name, _)) =
                 mic_items.iter().find(|(id, _, _)| *id == menu_event.id)
             {

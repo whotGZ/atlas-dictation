@@ -22,7 +22,7 @@ Cloud dictation services send your patient audio to a third party. They want a B
 
 ## Status
 
-**v0.4.1 — macOS (Apple Silicon) only.** Real `.app` bundle with a menubar icon and a Quit menu, GPU-accelerated (Metal) transcription, single-tap Right Option hotkey, clinically-tuned spoken punctuation, English-only output, and a voice-activity noise gate. The current build hard-depends on macOS-specific bits (`afplay`, `/System/Library/Sounds/`, Accessibility permission model, Cmd-V paste, Core Graphics event tap, Metal). Linux + Windows ports are on the roadmap.
+**v0.4.2 — macOS (Apple Silicon) only.** Real `.app` bundle with a menubar icon and a Quit menu, GPU-accelerated (Metal) transcription, single-tap Right Option hotkey, clinically-tuned spoken punctuation, and English-only output. (The v0.4.1 VAD noise gate was removed — it clipped speech on some mics.) The current build hard-depends on macOS-specific bits (`afplay`, `/System/Library/Sounds/`, Accessibility permission model, Cmd-V paste, Core Graphics event tap, Metal). Linux + Windows ports are on the roadmap.
 
 ## Install
 
