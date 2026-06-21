@@ -1,0 +1,73 @@
+name: build
+
+# Compiles the app on macOS, Linux, and Windows so the cross-platform code is
+# verified on every push. Artifacts are the bare binary — to run, drop the
+# Whisper model (and optional VAD model) next to it; the app prints the download
+# command if the model is missing.
+
+on:
+  push:
+    branches: [main, cross-platform]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Linux: ALSA (cpal), GTK + appindicator (tray-icon), X11 (rdev), clang
+      # (whisper-rs-sys bindgen), cmake (whisper.cpp).
+      - name: Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libgtk-3-dev libxdo-dev libayatana-appindicator3-dev \
+            libx11-dev libxi-dev libxtst-dev libxcb1-dev \
+            clang cmake
+
+      # Windows: LLVM provides libclang for whisper-rs-sys bindgen.
+      - name: Windows LLVM
+        if: runner.os == 'Windows'
+        run: choco install llvm --yes --no-progress
+      - name: Windows LIBCLANG_PATH
+        if: runner.os == 'Windows'
+        run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      # macOS: cmake for whisper.cpp (clang ships with Xcode CLT).
+      - name: macOS cmake
+        if: runner.os == 'macOS'
+        run: brew install cmake || true
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Upload binary (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-dictation-${{ runner.os }}
+          path: target/release/atlas-dictation
+
+      - name: Upload binary (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-dictation-Windows
+          path: target/release/atlas-dictation.exe
