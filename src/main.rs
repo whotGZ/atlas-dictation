@@ -296,6 +296,23 @@ fn pipeline_main(
                     params.set_print_realtime(false);
                     params.set_print_timestamps(false);
                     params.set_initial_prompt(&initial_prompt);
+                    // Anti-hallucination (no VAD bundled, so noise/silence reaches
+                    // the decoder). These stop Whisper inventing words on non-speech:
+                    // - suppress_nst: drop "*music*", "*rings*"-style sound-event tokens.
+                    // - suppress_blank: don't open a segment on blank/leading space.
+                    // - temperature 0 + no inc: kill the temperature-fallback decode,
+                    //   the path that emits low-prob foreign-script garbage (Cyrillic/
+                    //   Arabic/Turkish drift) on bad audio.
+                    // - no_speech_thold raised: segments Whisper itself scores as
+                    //   no-speech (>0.6) are dropped instead of transcribed.
+                    // - no_context: a junk segment can't poison the next one (kills the
+                    //   "The answer is painful." x3 repetition loops).
+                    params.set_suppress_nst(true);
+                    params.set_suppress_blank(true);
+                    params.set_temperature(0.0);
+                    params.set_temperature_inc(0.0);
+                    params.set_no_speech_thold(0.6);
+                    params.set_no_context(true);
                     // Noise gate: when the VAD model is present, Whisper runs it
                     // first and only transcribes detected speech — silence and
                     // background noise never reach the decoder, so they can't be
@@ -585,7 +602,9 @@ fn build_stream(
 
 fn spawn_event_tap(tx: Sender<Cmd>) {
     thread::spawn(move || {
-        use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+        use core_foundation::runloop::{
+            kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFRunLoop,
+        };
         use core_graphics::event::{
             CGEventTap, CGEventTapLocation, CGEventTapOptions,
             CGEventTapPlacement, CGEventType,
@@ -663,7 +682,22 @@ fn spawn_event_tap(tx: Sender<Cmd>) {
             CFRunLoop::get_current().add_source(&loop_source, kCFRunLoopCommonModes);
         }
         tap.enable();
-        CFRunLoop::run_current(); // blocks; the OS delivers events here.
+        // macOS silently DISABLES an event tap on sleep/wake and under load
+        // (kCGEventTapDisabledByTimeout). run_current() can't recover from that —
+        // the hotkey just goes dead until relaunch ("works after boot, stops
+        // later"). So pump the loop in 1s slices and re-arm every pass.
+        // ponytail: unconditional re-enable is idempotent — skip the
+        // CGEventTapIsEnabled FFI; if hotkey latency ever matters, shorten the slice.
+        loop {
+            unsafe {
+                CFRunLoop::run_in_mode(
+                    kCFRunLoopDefaultMode,
+                    std::time::Duration::from_secs(1),
+                    false,
+                );
+            }
+            tap.enable();
+        }
     });
 }
 
@@ -984,21 +1018,27 @@ fn resample_linear(input: &[f32], in_rate: u32, out_rate: u32) -> Vec<f32> {
     out
 }
 
-/// True for Chinese/Japanese/Korean characters (and their fullwidth/CJK
-/// punctuation). This is an English-only clinical tool, so any of these in the
-/// output is a Whisper language-drift hallucination — strip them. Deliberately
-/// narrow: leaves Greek (α/β/µ), accented Latin (café), and normal punctuation
-/// (— " ') untouched so real English text is never harmed.
-fn is_cjk(c: char) -> bool {
+/// True for non-Latin script characters that only appear via Whisper
+/// language-drift hallucination in this English-only clinical tool: CJK
+/// (Chinese/Japanese/Korean), Cyrillic, Arabic, Hebrew, Thai, Devanagari, etc.
+/// Deliberately narrow on the keep side: leaves Greek (α/β/µ), accented Latin
+/// (café, ñ, ü), and normal punctuation (— " ') untouched so real English /
+/// medical text is never harmed.
+fn is_drift_script(c: char) -> bool {
     matches!(c as u32,
+        // CJK + Hangul + fullwidth/CJK punctuation
         0x3000..=0x303F | 0x3040..=0x309F | 0x30A0..=0x30FF | 0x3400..=0x4DBF
         | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xAC00..=0xD7AF | 0x1100..=0x11FF
-        | 0xFF00..=0xFFEF)
+        | 0xFF00..=0xFFEF
+        // Cyrillic, Arabic, Hebrew, Thai, Devanagari, Armenian, Georgian
+        | 0x0400..=0x04FF | 0x0500..=0x052F | 0x0600..=0x06FF | 0x0750..=0x077F
+        | 0x0590..=0x05FF | 0x0E00..=0x0E7F | 0x0900..=0x097F | 0x0530..=0x058F
+        | 0x10A0..=0x10FF)
 }
 
 fn scrub(text: &str) -> String {
     // Strip CJK hallucinations first; the space-collapse below closes any gaps.
-    let mut s: String = text.trim().chars().filter(|&c| !is_cjk(c)).collect();
+    let mut s: String = text.trim().chars().filter(|&c| !is_drift_script(c)).collect();
     let fillers = Regex::new(
         r"(?i)\b(uh+|um+|er+|erm+|ah+|hmm+|mm+m*|like|you know|i mean|kind of|sort of)\b[,.]?\s*"
     ).unwrap();
