@@ -1,6 +1,12 @@
-# Atlas Intensive Care Dictation v0.4.2
+# Atlas Intensive Care Dictation v0.4.3
 
 Local medical dictation that never sends a byte to the cloud.
+
+## New in v0.4.3 (fix)
+
+- **Fixed: hotkey going dead after the Mac sleeps.** The Right Option (⌥) shortcut worked right after starting the computer but could stop responding later — tapping it did nothing, so no recording started and nothing got typed. macOS quietly switches off the keyboard shortcut on sleep/wake; the app now re-arms it automatically (within ~1 second) instead of staying dead until you relaunch.
+
+**If dictation has been "working, then not working" for you, update to v0.4.3.**
 
 ## New in v0.4.2 (fixes)
 
